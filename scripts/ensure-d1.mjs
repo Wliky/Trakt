@@ -26,7 +26,7 @@ const customBin = process.env.WRANGLER_BIN;
 // WRANGLER_BIN 指向 .mjs/.js 时用当前 node 执行，方便用测试桩替换 wrangler
 const isScript = Boolean(customBin && /\.(mjs|js|cjs)$/i.test(customBin));
 const cmd = isScript ? process.execPath : customBin || (process.platform === 'win32' ? 'npx.cmd' : 'npx');
-const baseArgs = isScript ? [customBin] : customBin ? [] : ['--yes', 'wrangler@latest'];
+const baseArgs = isScript ? [customBin] : customBin ? [] : ['--yes', `wrangler@${process.env.WRANGLER_VERSION || '4'}`];
 
 /** 运行 wrangler，返回 {ok, out, err}，不抛异常 */
 function wrangler(args) {

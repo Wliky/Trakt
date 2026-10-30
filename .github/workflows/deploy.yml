@@ -12,32 +12,43 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_VERSION: '4'
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: 检查仓库密钥
+        id: check
         run: |
           if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
-            echo "::error::缺少仓库 Secret CLOUDFLARE_API_TOKEN（需 Workers Scripts:Edit + D1:Edit 权限）"
+            echo "::error::缺少 Secret CLOUDFLARE_API_TOKEN（需 Workers Scripts:Edit + D1:Edit 权限）"
             exit 1
           fi
           if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
-            echo "::error::缺少仓库 Secret CLOUDFLARE_ACCOUNT_ID"
+            echo "::error::缺少 Secret CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 安装 Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: 缓存 wrangler 下载
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-wrangler${{ env.WRANGLER_VERSION }}
 
       - name: 确保 D1 数据库 Trakt 存在
         run: node scripts/ensure-d1.mjs
 
       - name: 应用表结构
-        run: npx --yes wrangler@latest d1 execute Trakt --file=./schema.sql --remote -y
+        run: npx --yes wrangler@${WRANGLER_VERSION} d1 execute Trakt --file=./schema.sql --remote -y
 
       - name: 部署 Worker
-        run: npx --yes wrangler@latest deploy
+        run: npx --yes wrangler@${WRANGLER_VERSION} deploy
