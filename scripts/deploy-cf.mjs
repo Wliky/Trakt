@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const wrangler = (args) =>
-  execFileSync(npx, ['--yes', 'wrangler@latest', ...args], { cwd: root, stdio: 'inherit' });
+  execFileSync(npx, ['--yes', 'wrangler@latest', ...args], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 
 console.log('→ 检查 Cloudflare 登录状态');
 try {
@@ -26,7 +26,7 @@ try {
 }
 
 console.log('→ 确保 D1 数据库');
-execFileSync(process.execPath, [path.join(root, 'scripts', 'ensure-d1.mjs')], { cwd: root, stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(root, 'scripts', 'ensure-d1.mjs')], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 
 console.log('→ 应用表结构 schema.sql');
 wrangler(['d1', 'execute', 'Trakt', '--file=./schema.sql', '--remote', '-y']);
