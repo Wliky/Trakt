@@ -1,0 +1,22 @@
+name = "trakt"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 静态资源（public/ 目录）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# 数据存储：Cloudflare D1（变量名 DB，库名 Trakt）
+# database_id 留空时由 GitHub Actions 或 scripts/deploy-cf.mjs 自动填入
+[[d1_databases]]
+binding = "DB"
+database_name = "Trakt"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[vars]
+COOKIE_SECURE = "true"
+TMDB_LANG = "zh-CN"
+# 可选：覆盖默认值
+# TRAKT_API_BASE = "https://apiz.trakt.tv"
+# TRAKT_AUTH_BASE = "https://auth.trakt.tv"

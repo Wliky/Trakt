@@ -1,0 +1,17 @@
+{
+  "name": "trakt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Trakt 数据管理面板：邮箱验证码登录（复用网页版 client_id），管理观看历史 / 评分 / 收藏 / 片单 / 统计，支持 Cloudflare Workers + D1 自部署",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "deploy:cf": "node scripts/deploy-cf.mjs",
+    "db:init": "node scripts/ensure-d1.mjs"
+  }
+}

@@ -1,0 +1,16 @@
+services:
+  trakt-manager:
+    build: .
+    image: trakt-manager:latest
+    container_name: trakt-manager
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # 反向代理为 https 时设为 true；本机 http 调试设为 false
+      COOKIE_SECURE: "false"
+      # 可选覆盖
+      # TRAKT_API_BASE: "https://apiz.trakt.tv"
+      # TRAKT_AUTH_BASE: "https://auth.trakt.tv"
