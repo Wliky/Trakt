@@ -21,6 +21,9 @@ TMDB_LANG = "zh-CN"
 # TRAKT_API_BASE = "https://apiz.trakt.tv"
 # TRAKT_AUTH_BASE = "https://auth.trakt.tv"
 
-# WebDAV 自动备份排程：cron 每小时触发一次，具体是否运行由设置页的备份计划决定
+# WebDAV 自动备份排程：cron 每小时触发一次，是否真的备份由设置页的计划（含分钟）决定。
+# 注意：免费账户的 Cron Triggers 上限是 5 个（整个账户所有 Worker 合计），用满后
+# wrangler 会报 "Trigger configuration ... only partially updated" 并让部署失败——
+# 那种情况下脚本其实已上线，只是 cron 没设上：去别的 Worker 删掉多余的 cron 再重跑即可。
 [triggers]
 crons = ["0 * * * *"]

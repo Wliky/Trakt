@@ -34,6 +34,7 @@ node server.js          # http://localhost:8787，零依赖，不用 npm install
 ## 部署
 
 - **GitHub Actions**：push main 即部署（`.github/workflows/deploy.yml`，官方 wrangler-action@v3）
+- 部署报 `Trigger configuration for "trakt" was only partially updated` 时先别慌：**脚本其实已经上线**，失败的只是 cron 触发器。免费账户的 Cron Triggers 上限是 **5 个（全账户所有 Worker 合计）**，用满了就会这样——去别的 Worker 删掉多余的 cron 再重跑（判据：`/ui.js`、`/api/backup` 能正常响应就说明代码已生效）
 - **本地**：`node scripts/deploy-cf.mjs`（需 `npx wrangler login` 或 CLOUDFLARE_API_TOKEN/ACCOUNT_ID）
 
 ## 登录方式（别改成 OAuth）
