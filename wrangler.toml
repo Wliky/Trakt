@@ -20,3 +20,7 @@ TMDB_LANG = "zh-CN"
 # 可选：覆盖默认值
 # TRAKT_API_BASE = "https://apiz.trakt.tv"
 # TRAKT_AUTH_BASE = "https://auth.trakt.tv"
+
+# WebDAV 自动备份排程：cron 每小时触发一次，具体是否运行由设置页的备份计划决定
+[triggers]
+crons = ["0 * * * *"]

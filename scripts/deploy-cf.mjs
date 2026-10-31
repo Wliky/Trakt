@@ -34,4 +34,37 @@ wrangler(['d1', 'execute', 'Trakt', '--file=./schema.sql', '--remote', '-y']);
 console.log('→ 部署');
 wrangler(['deploy']);
 
+// 部署成功 ≠ 线上是新版本：设了 APP_URL 就顺手验三条（未登录口径：health 200 / backup 401 / ui.js 200）
+const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+if (appUrl) {
+  console.log(`→ 部署后自检（${appUrl}）`);
+  const checks = [
+    ['/api/health', 200],
+    ['/api/backup', 401],
+    ['/ui.js', 200],
+  ];
+  let failed = 0;
+  for (const [p, want] of checks) {
+    let code = 0;
+    for (let i = 0; i < 6; i++) {
+      try {
+        code = (await fetch(appUrl + p, { redirect: 'manual' })).status;
+      } catch {
+        code = 0;
+      }
+      if (code === want) break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    const ok = code === want;
+    console.log(`  ${ok ? '✓' : '✗'} ${p} → ${code || '网络失败'}（期望 ${want}）`);
+    if (!ok) failed++;
+  }
+  if (failed) {
+    console.error(`\n自检失败 ${failed} 项：线上可能还在跑旧版本（缓存或旧 Worker），请检查 wrangler 输出。`);
+    process.exit(1);
+  }
+} else {
+  console.log('\n提示：设 APP_URL=https://你的域名 再运行，可自动做部署后自检。');
+}
+
 console.log('\n完成。打开输出的 workers.dev 地址即可登录。');

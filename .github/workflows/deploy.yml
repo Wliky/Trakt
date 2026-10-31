@@ -7,8 +7,44 @@ on:
       - '**.md'
   workflow_dispatch:
 
+# 同一时间只跑一条流水线，避免两次部署互相覆盖
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  APP_URL: https://trakt.wliky.workers.dev
+
 jobs:
+  # 质量门禁：测试或打包不过，就不进入部署
+  test:
+    name: 质量门禁（测试 + 打包校验）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 远端仓库只放运行时代码，没有 tests/ 时别因为「找不到测试文件」卡住部署
+      - name: 单元测试（零依赖，不需要 npm install）
+        run: |
+          if [ -d tests ] && ls tests/*.test.mjs >/dev/null 2>&1; then
+            npm test
+          else
+            echo "本仓库不含 tests/（只推送了运行时代码），跳过单元测试"
+          fi
+
+      - name: Worker 打包校验（dry-run，不上传）
+        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/wrangler-dry
+
   deploy:
+    name: 部署
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -74,11 +110,43 @@ jobs:
           wranglerVersion: '4'
           command: deploy
 
+      # 部署"成功"不等于线上是新版本：这条冒烟专门抓 assets 没刷新 / 旧 Worker 还在跑
+      - name: 部署后冒烟（线上必须已是新版本）
+        run: |
+          set -euo pipefail
+          BASE="${APP_URL}"
+
+          ok=0
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health" || true)
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            echo "第 $i 次探测 /api/health = $code，5s 后重试"
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::线上 /api/health 未返回 200"
+            exit 1
+          fi
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/backup")
+          if [ "$code" != "401" ]; then
+            echo "::error::/api/backup 期望 401（未登录），实际 $code —— 线上可能还是旧版本"
+            exit 1
+          fi
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/ui.js")
+          if [ "$code" != "200" ]; then
+            echo "::error::/ui.js 期望 200，实际 $code —— 静态资源未更新"
+            exit 1
+          fi
+
+          echo "✓ 冒烟通过：/api/health 200、/api/backup 401、/ui.js 200"
+
       - name: 部署结果
         if: always()
         run: |
           if [ "${{ job.status }}" = "success" ]; then
             echo "🎉 部署完成"
           else
-            echo "💥 部署失败，查看上面的 wrangler 输出"
+            echo "💥 部署失败，查看上面的 wrangler / 冒烟输出"
           fi

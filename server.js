@@ -5,13 +5,35 @@
 
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { handleRequest } from './lib/core.js';
+import { handleRequest, runDueBackups } from './lib/core.js';
 import { FileStore } from './lib/store-node.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// ── .env 加载（零依赖）──────────────────────────────────────────────
+// 优先级：真实环境变量 > .env > 代码默认值。
+// Node 20.12+ 用内置 process.loadEnvFile()，和 `node --env-file=.env` 同一套解析器，
+// 且不会覆盖已存在的环境变量；更老的 Node 只提示、不报错，保持零依赖。
+// ENV_FILE=none 可显式关闭，ENV_FILE=/abs/path 可指定文件。
+const ENV_FILE = process.env.ENV_FILE === 'none' ? null : process.env.ENV_FILE || path.join(__dirname, '.env');
+let envFileLoaded = false;
+if (ENV_FILE && existsSync(ENV_FILE)) {
+  if (typeof process.loadEnvFile === 'function') {
+    try {
+      process.loadEnvFile(ENV_FILE);
+      envFileLoaded = true;
+    } catch (err) {
+      console.warn(`[env] 读取 ${ENV_FILE} 失败，改用现有环境变量：${err?.message || err}`);
+    }
+  } else {
+    console.warn(`[env] 发现 ${path.basename(ENV_FILE)}，但当前 Node ${process.versions.node} 不支持自动加载，请改用 node --env-file=.env server.js`);
+  }
+}
+
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -106,5 +128,22 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  console.log(`\n  Trakt Manager 已启动 → http://${shown}:${PORT}\n  数据目录: ${DATA_DIR}\n`);
+  const source = envFileLoaded ? `.env（${ENV_FILE}）` : '进程环境变量';
+  const tmdb = process.env.TMDB_API_KEY || process.env.TMDB_TOKEN ? '已通过环境变量配置' : '未配置（可在设置页填）';
+  console.log(
+    `\n  Trakt Manager 已启动 → http://${shown}:${PORT}` +
+      `\n  数据目录: ${DATA_DIR}` +
+      `\n  配置来源: ${source}` +
+      `\n  COOKIE_SECURE: ${process.env.COOKIE_SECURE || 'auto'}` +
+      `\n  TMDB: ${tmdb}\n`
+  );
 });
+
+// WebDAV 自动备份排程：每分钟检查一次到点任务（Workers 侧由 cron 触发同名入口）
+setInterval(async () => {
+  try {
+    await runDueBackups(ctx);
+  } catch (err) {
+    console.error('[backup] 定时任务执行失败:', err?.message || err);
+  }
+}, 60_000).unref();

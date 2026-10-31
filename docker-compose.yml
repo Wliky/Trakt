@@ -8,9 +8,16 @@ services:
       - "8787:8787"
     volumes:
       - ./data:/app/data
+    # 变量来源：compose 会自动读取同目录的 .env 做插值（cp .env.example .env 即可），
+    # 也可用 docker compose --env-file .env up -d。留空则用镜像内置默认值。
     environment:
+      DATA_DIR: /app/data
       # 反向代理为 https 时设为 true；本机 http 调试设为 false
-      COOKIE_SECURE: "false"
-      # 可选覆盖
-      # TRAKT_API_BASE: "https://apiz.trakt.tv"
-      # TRAKT_AUTH_BASE: "https://auth.trakt.tv"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      TMDB_LANG: "${TMDB_LANG:-zh-CN}"
+      TMDB_API_KEY: "${TMDB_API_KEY:-}"
+      TMDB_TOKEN: "${TMDB_TOKEN:-}"
+      TRAKT_CLIENT_ID: "${TRAKT_CLIENT_ID:-}"
+      TRAKT_API_BASE: "${TRAKT_API_BASE:-}"
+      TRAKT_AUTH_BASE: "${TRAKT_AUTH_BASE:-}"
+      TRAKT_USER_AGENT: "${TRAKT_USER_AGENT:-}"

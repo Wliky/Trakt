@@ -1,6 +1,27 @@
 node_modules/
-data/
+# 仅忽略根目录的数据目录；不要写成 data/，否则会误伤
+# .codebuddy/skills/*/data/ 这类 skill 自带数据集
+/data/
+__pycache__/
 *.log
+.server.err
+.playwright-cli/
 .DS_Store
 .wrangler/
 .env
+
+# 本地验收截图（根目录）
+/*.png
+# 误操作产生的重定向残留文件（以 { 或 ( 开头的怪名文件）
+/{*
+/(*
+
+# 远端只放运行时代码：本地测试、文档、截图、设计稿与接手上下文不进仓库
+/tests/
+/docs/
+/trakt_project_docs/
+/figures/
+/design-system/
+/.preview/
+/.codebuddy/
+/.agents/

@@ -1,8 +1,20 @@
 node_modules
 data
 .git
+.github
 .gitignore
 *.log
+.server.*
 .DS_Store
 README.md
+AGENTS.md
 docker-compose.yml
+# 密钥绝不进构建上下文
+.env*
+# 只在开发/CI 用，运行时不依赖
+tests
+scripts
+docs
+# AI 助手的 skill 数据，运行时不依赖
+.codebuddy
+.agents

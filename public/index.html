@@ -3,14 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
 <title>Trakt Manager · 数据管理</title>
-<link rel="stylesheet" href="/styles.css" />
+<script>
+/* 首帧主题：在样式解析前写入 data-theme，避免浅色用户看到深色闪一下 */
+(function () {
+  try {
+    var m = localStorage.getItem('tm_theme') || 'auto';
+    if (m === 'auto') m = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = m === 'light' ? 'light' : 'dark';
+  } catch (e) {
+    document.documentElement.dataset.theme = 'dark';
+  }
+})();
+</script>
+<link rel="stylesheet" href="/tokens.css?v=20261101g" />
+<link rel="stylesheet" href="/styles.css?v=20261101g" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23ed1c24'/><path d='M8 11h16M16 11v11' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>" />
 </head>
 <body>
   <div id="app"></div>
   <div id="toast" class="toast"></div>
   <div id="modal-root"></div>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=20261101g"></script>
 </body>
 </html>
