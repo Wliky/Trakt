@@ -5344,13 +5344,126 @@ PAGES.settings = async () => {
     }
   };
 
+  /* 分段备份：每页单独一次请求，Worker 每次只发 1 个子请求。
+     Workers 免费计划单次调用最多 50 个子请求，数据量大的账号一次拉不完，拆成多轮就能拉全。 */
+  const DAV_CHUNK_PAGES = 200; // 单类数据最多 200 页（20000 条）
+
+  /** 快速路径够不够用：探测历史条数与列表个数，估算会撞上限就改走分段 */
+  const davNeedChunked = async () => {
+    try {
+      const [h, l] = await Promise.all([
+        api('/sync/history', { query: { limit: 1, page: 1 } }),
+        api('/users/me/lists', { query: { limit: 1, page: 1 } }),
+      ]);
+      const histPages = Math.min(Math.ceil(Number(h.pagination?.itemCount || 0) / 100), 18);
+      const lists = Math.min(Number(l.pagination?.itemCount || 0), 100);
+      // 快速路径固定开销：评分 4 页 + 待看 3 + 收藏 3 + 列表 1，每个列表条目再按 2 页估
+      return histPages + 4 + 3 + 3 + 1 + lists * 2 > 28;
+    } catch {
+      return false; // 探测失败先走快速路径，真被截断了再降级
+    }
+  };
+
+  /** 逐页拉全：每页一次独立请求，3 页并发，track 用来刷新进度 */
+  const davPullAll = async (path, query, track, { limit = 100, maxPages = DAV_CHUNK_PAGES } = {}) => {
+    const load = (page) => api(path, { query: { ...query, limit, page } });
+    const first = await load(1);
+    const rows = Array.isArray(first.data) ? first.data.slice() : [];
+    const pageCount = Math.max(1, Number(first.pagination?.pageCount || 1));
+    const total = Math.min(pageCount, maxPages);
+    track(1, total);
+    let page = 2;
+    while (page <= total) {
+      const wave = [];
+      for (let i = 0; i < 3 && page <= total; i += 1, page += 1) wave.push(page);
+      const got = await Promise.all(wave.map(load));
+      for (const g of got) if (Array.isArray(g.data)) rows.push(...g.data);
+      track(page - 1, total);
+    }
+    return { rows, truncated: pageCount > total };
+  };
+
+  /** 分段备份：浏览器拼好整份 JSON，再交给服务端一次 PUT（只花 2 个子请求） */
+  const davBackupChunked = async () => {
+    const box = $('#dav-status');
+    const show = (t) => {
+      box.innerHTML = `<span class="note">${esc(t)}</span>`;
+    };
+    const track = (label) => (done, total) => show(total > 1 ? `${label} ${done}/${total} 页…` : `${label}…`);
+
+    show('读取观看历史…');
+    const history = await davPullAll('/sync/history', {}, track('观看历史'));
+    const ratings = {};
+    for (const t of ['movies', 'shows', 'episodes', 'seasons']) {
+      show(`读取评分（${t}）…`);
+      ratings[t] = (await davPullAll(`/users/me/ratings/${t}`, {}, track(`评分 ${t}`))).rows;
+    }
+    show('读取待看…');
+    const watchlist = await davPullAll('/sync/watchlist', {}, track('待看'));
+    show('读取收藏…');
+    const favorites = await davPullAll('/users/me/favorites', {}, track('收藏'));
+    show('读取自定义列表…');
+    const listsRes = await davPullAll('/users/me/lists', {}, track('列表'), { limit: 100, maxPages: 1 });
+
+    const lists = [];
+    for (const l of listsRes.rows.slice(0, 100)) {
+      const id = l?.ids?.trakt || l?.id;
+      if (!id) continue;
+      show(`读取列表「${l.name || id}」…`);
+      const items = await davPullAll(`/users/me/lists/${id}/items`, {}, track(`列表「${l.name || id}」`), { limit: 100, maxPages: 100 });
+      lists.push({ ...l, items: items.rows, itemsTruncated: items.truncated });
+    }
+
+    const data = { history: history.rows, ratings, watchlist: watchlist.rows, favorites: favorites.rows, lists };
+    const payload = {
+      format: 'trakt-manager-backup',
+      version: 1,
+      createdAt: new Date().toISOString(),
+      app: 'trakt-manager',
+      user: { username: state.user?.username || '', name: state.user?.name || '' },
+      settings: { displayLanguage: getLang() },
+      data,
+      counts: {
+        history: data.history.length,
+        ratings: Object.values(ratings).reduce((n, r) => n + r.length, 0),
+        watchlist: data.watchlist.length,
+        favorites: data.favorites.length,
+        lists: lists.length,
+        listItems: lists.reduce((n, l) => n + l.items.length, 0),
+      },
+      truncated: {
+        history: history.truncated,
+        ratings: Object.values(ratings).some((r) => r.truncated),
+        watchlist: watchlist.truncated,
+        favorites: favorites.truncated,
+        budget: false,
+        listItems: lists.some((l) => l.itemsTruncated),
+      },
+      warnings: [],
+    };
+
+    show('上传到 WebDAV…');
+    return apiJson('/api/backup/dav/upload', { method: 'POST', body: { payload } });
+  };
+
   $('#dav-run').onclick = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
     btn.textContent = '备份中…';
     try {
       await saveDav(false);
-      const j = await apiJson('/api/backup/dav/run', { method: 'POST', body: {} });
+      let j;
+      if (await davNeedChunked()) {
+        j = await davBackupChunked();
+      } else {
+        j = await apiJson('/api/backup/dav/run', { method: 'POST', body: {} });
+        // 估算没算准、被预算截断：删掉这份残缺文件，改走分段重来
+        if (j.truncated?.budget) {
+          await apiJson('/api/backup/dav/delete', { method: 'POST', body: { name: j.name } }).catch(() => {});
+          toast('数据量超出单次上限，改走分段备份');
+          j = await davBackupChunked();
+        }
+      }
       paintDav(j.config);
       const cut = j.truncated && Object.values(j.truncated).some(Boolean)
         ? `<span class="note" style="display:block">数据量超过单次请求上限，本次备份是部分的（观看历史 ${num(j.counts?.history || 0)} 条等），恢复时请留意</span>`

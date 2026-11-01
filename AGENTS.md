@@ -92,6 +92,7 @@ Trakt 已无账号密码登录。本项目复刻**Trakt 网页版**链路：`aut
 - 设置页 DAV 区是左右两栏 `.dav-grid`（左：连接 + 备份计划 + 保存；右：运行状态 6 行 + 手动操作）：**字段一律两列排布，别用 `.dav-field.full` 独占整行**，两栏信息量要接近——左栏加字段就给右栏补一行状态，反之亦然。
 - 远端文件名只认 `^trakt-backup-[A-Za-z0-9._-]+\.json$`（读和删都校验），改命名规则时两处 `davFileName()` 与校验正则要一起改。
 - 单类数据上限 50 页 / 5000 条，超出只在 `truncated` 标注；自定义列表最多备份 100 个。
+- **两条备份路径，前端自动分流**：`davNeedChunked()` 先探测 `/sync/history` 与 `/users/me/lists` 的 `pagination.itemCount`，估算会撞免费计划 50 子请求上限就走**分段**——`davPullAll()` 逐页打 `/api/trakt`（每次调用只发 1 个子请求，历史不再受 18 页限制），浏览器拼好整份 JSON 后 `POST /api/backup/dav/upload`，后端只做 `davEnsureDir` + `davPut`（2 个子请求，20 MB 上限、`readJsonLimited`）。数据量小的账号直接走 `/api/backup/dav/run` 快速路径；若仍回 `truncated.budget`，前端会删掉残file再自动重走分段。改备份结构时两条路径的 `payload` 组装（`davBackupChunked()`）必须同步。
 
 ## 现状
 
