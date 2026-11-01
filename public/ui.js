@@ -1,6 +1,8 @@
 // 前端通用片段：纯渲染 + 局部绑定，无框架、无构建（浏览器 ES Module）
 // 业务与路由逻辑仍留在 app.js，这里只放各列表页共用的「原子件」
 
+import { getLang } from './i18n.js';
+
 export const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -22,6 +24,8 @@ export const ICON = {
   list: svg('<path d="M8.5 6h12M8.5 12h12M8.5 18h12"/><circle cx="4" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.1" fill="currentColor" stroke="none"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="m20.2 20.2-3.4-3.4"/>'),
   settings: svg('<path d="M4 7.5h8M18.5 7.5H20M4 16.5h1.5M12 16.5h8"/><circle cx="15.2" cy="7.5" r="2.3"/><circle cx="8.8" cy="16.5" r="2.3"/>'),
+  calendar: svg('<rect x="3.4" y="5.2" width="17.2" height="15" rx="2.4"/><path d="M8.2 3.4v3.4M15.8 3.4v3.4M3.4 10.4h17.2"/>'),
+  clock: svg('<circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3.2 1.9"/>'),
   tv: svg('<rect x="2.8" y="7" width="18.4" height="12.6" rx="2.2"/><path d="m8.2 3.2 3.8 3.8 3.8-3.8"/>'),
   heart: svg('<path d="M12 20.2s-7.2-4.5-7.2-9.4A4.2 4.2 0 0 1 12 8.2a4.2 4.2 0 0 1 7.2 2.6c0 4.9-7.2 9.4-7.2 9.4Z"/>'),
   chart: svg('<path d="M4 20V11M10 20V4.5M16 20v-6.5M22 20H2"/>'),
@@ -57,11 +61,16 @@ export function posterImg(src, cls = 'thumb') {
     onerror="this.classList.add('thumb-empty');this.removeAttribute('src')" />`;
 }
 
-/** 首次加载骨架（不用 spinner） */
-export function loadingBox(label = '') {
-  return `<div class="empty"><span class="skeleton" style="display:inline-block;width:180px"></span>${
-    label ? `<div class="title-sub" style="margin-top:8px">${esc(label)}</div>` : ''
-  }</div>`;
+/**
+ * 首次加载骨架（不用 spinner）：一条来回扫的进度条 + 一行「正在加载」。
+ * 文案全站统一（不再按页面各写「正在读取…」），居中靠 .empty 的 grid-column 兜底，
+ * 放进 7 列日历网格里也不会被压成一列宽。
+ */
+export function loadingBox() {
+  return `<div class="empty loading-box" role="status" aria-live="polite">
+    <span class="load-bar"><i></i></span>
+    <span class="load-text">正在加载</span>
+  </div>`;
 }
 
 /** 空态：无数据 / 无筛选结果，可给下一步引导 */
@@ -101,6 +110,468 @@ export function errorState(err, { retryLabel = '重试' } = {}) {
 /** 绑定错误态里的「重试」按钮 */
 export function bindRetry(root, fn) {
   root.querySelectorAll('[data-retry]').forEach((b) => (b.onclick = fn));
+}
+
+/* ───────── 年月选择浮层（概览 / 追剧 / 记录 共用） ─────────
+   点标题弹出：左列选年、右列选月，选完即关；‹ › 翻页按钮保持原样。
+   用锚定浮层而不是居中遮罩——选年月时还看得见日历本身，也不多一次「确定」。 */
+
+const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const isEnUi = () => getLang() === 'en-US';
+const monthText = (m) => (isEnUi() ? MONTHS_EN[m - 1] : `${m} 月`);
+
+let activePicker = null;
+
+/** 关掉当前打开的锚定浮层（年月 / 日期 / 时间 / 星期 / 几号，没有则什么都不做） */
+export function closePicker() {
+  if (!activePicker) return;
+  const p = activePicker;
+  activePicker = null;
+  p.anchor.setAttribute('aria-expanded', 'false');
+  p.pop.remove();
+  document.removeEventListener('pointerdown', p.onOutside, true);
+  document.removeEventListener('keydown', p.onKey, true);
+  window.removeEventListener('resize', p.onViewport, true);
+  window.removeEventListener('scroll', p.onViewport, true);
+}
+
+/** 兼容旧名：年月浮层也走同一套 */
+export const closeMonthPicker = closePicker;
+
+/**
+ * 建浮层并挂上全局关闭逻辑（外部点击 / ESC / 视口变化）。
+ * 同一个触发按钮再点一次就是收起，此时返回 null。
+ */
+function openPicker(anchor, { cls = 'ym-pop', label = '' } = {}) {
+  if (activePicker && activePicker.anchor === anchor) {
+    closePicker();
+    return null;
+  }
+  closePicker();
+  const pop = document.createElement('div');
+  pop.className = `pick-pop ${cls}`.trim();
+  pop.setAttribute('role', 'dialog');
+  if (label) pop.setAttribute('aria-label', label);
+  document.body.appendChild(pop);
+
+  // 贴在触发按钮下方；底下放不下就翻到上方，两侧留 12px 安全边
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const gap = 6;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12));
+    let top = r.bottom + gap;
+    if (top + pop.offsetHeight > window.innerHeight - 12) top = Math.max(12, r.top - pop.offsetHeight - gap);
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+  };
+
+  const onOutside = (e) => {
+    if (pop.contains(e.target) || anchor.contains(e.target)) return;
+    closePicker();
+  };
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    // 浮层可能开在弹窗里，别让这次 ESC 顺带把弹窗也关了
+    e.stopPropagation();
+    closePicker();
+  };
+  // 页面滚动 / 改窗口就收起；但浮层自己的滚动（时间滚轮）不算
+  const onViewport = (e) => {
+    const t = e && e.target;
+    if (t && t.nodeType && pop.contains(t)) return;
+    closePicker();
+  };
+
+  activePicker = { anchor, pop, onOutside, onKey, onViewport };
+  anchor.setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', onOutside, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', onViewport, true);
+  window.addEventListener('scroll', onViewport, true);
+  return { pop, place };
+}
+
+/**
+ * 年月双栏的骨架。日历页的年月浮层（mountMonthPicker）与日期浮层的
+ * 「切换年月」视图共用这一份 DOM，改结构只改这里。
+ * startYear：年列从哪年开始（共 12 个）；selYear/selMonth：当前高亮项；
+ * curYear：已经定下的年份（只有它下面的月份才高亮）。
+ */
+function ymColsHtml({ startYear, selYear, selMonth = 0, curYear, withMonth = true }) {
+  const nowY = new Date().getFullYear();
+  const years = Array.from({ length: 12 }, (_, i) => startYear + i);
+  return `
+      <div class="ym-col ym-years">
+        <div class="ym-head">
+          <button type="button" class="ym-nav" data-yshift="-1" aria-label="${isEnUi() ? 'Earlier' : '更早'}">‹</button>
+          <b>${years[0]}–${years[years.length - 1]}</b>
+          <button type="button" class="ym-nav" data-yshift="1" aria-label="${isEnUi() ? 'Later' : '更晚'}">›</button>
+        </div>
+        <div class="ym-grid">${years
+          .map(
+            (y) =>
+              `<button type="button" class="ym-btn${y === selYear ? ' on' : ''}${y === nowY ? ' now' : ''}" data-y="${y}">${y}</button>`
+          )
+          .join('')}</div>
+      </div>
+      ${
+        withMonth
+          ? `<div class="ym-col ym-months">
+        <div class="ym-head"><b>${selYear}${isEnUi() ? '' : ' 年'}</b></div>
+        <div class="ym-grid">${Array.from({ length: 12 }, (_, i) => i + 1)
+          .map(
+            (m) =>
+              `<button type="button" class="ym-btn${
+                selYear === curYear && m === selMonth ? ' on' : ''
+              }" data-m="${m}">${monthText(m)}</button>`
+          )
+          .join('')}</div>
+      </div>`
+          : ''
+      }`;
+}
+
+/**
+ * anchor：触发按钮；year / month：当前查看的年月；
+ * withMonth=false 时只选年（概览的「年度」视图）；onPick(y, m) 由调用方写路由。
+ */
+export function mountMonthPicker(anchor, { year, month = 0, withMonth = true, onPick } = {}) {
+  const nowY = new Date().getFullYear();
+  const curY = Number(year) || nowY;
+  const curM = Number(month) || 0;
+  let pendingYear = curY;
+  let startYear = curY - 6;
+
+  const opened = openPicker(anchor, {
+    cls: withMonth ? 'ym-pop' : 'ym-pop ym-year-only',
+    label: isEnUi() ? 'Select year and month' : '选择年月',
+  });
+  if (!opened) return; // 再点一次同一个按钮 = 收起
+  const { pop, place } = opened;
+
+  const finish = (y, m) => {
+    closePicker();
+    if (onPick) onPick(y, m);
+  };
+
+  const render = () => {
+    pop.innerHTML = ymColsHtml({ startYear, selYear: pendingYear, selMonth: curM, curYear: curY, withMonth });
+  };
+
+  render();
+  place();
+
+  pop.onclick = (e) => {
+    const nav = e.target.closest('[data-yshift]');
+    if (nav) {
+      startYear += Number(nav.dataset.yshift) * 12;
+      render();
+      place();
+      return;
+    }
+    const yb = e.target.closest('[data-y]');
+    if (yb) {
+      pendingYear = Number(yb.dataset.y);
+      if (!withMonth) return finish(pendingYear, 0);
+      render();
+      place();
+      pop.querySelector(`[data-y="${pendingYear}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const mb = e.target.closest('[data-m]');
+    if (mb) finish(pendingYear, Number(mb.dataset.m));
+  };
+
+  pop.querySelector('.ym-btn.on')?.focus({ preventScroll: true });
+}
+
+/* ───────── 日期选择（月历） ─────────
+   替代原生 <input type="date">：原生控件各浏览器长得都不一样，
+   而这里的观感与「年月」浮层完全一致（同一套 .pick-pop）。 */
+
+const DOW_CN = ['一', '二', '三', '四', '五', '六', '日'];
+const DOW_EN = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+const pad2 = (n) => String(n).padStart(2, '0');
+const dayKey = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
+
+/**
+ * 月历浮层：周一起始，点日期即回传 "YYYY-MM-DD"；
+ * clearable=true 时底部给「清除」（回传空串）。
+ */
+export function mountDatePicker(anchor, { value = '', onPick, clearable = false } = {}) {
+  const now = new Date();
+  const todayKey = dayKey(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? new Date(`${value}T00:00:00`) : now;
+  let viewY = start.getFullYear();
+  let viewM = start.getMonth() + 1;
+  // 头部年月是一个按钮：点开切到「年月双栏」（就是日历页那套 ymColsHtml），选完月回到日历
+  let mode = 'day';
+  let ymYear = viewY;
+  let ymStart = viewY - 6;
+
+  const opened = openPicker(anchor, { cls: 'ym-pop pick-cal', label: isEnUi() ? 'Select date' : '选择日期' });
+  if (!opened) return;
+  const { pop, place } = opened;
+
+  const render = () => {
+    if (mode === 'ym') {
+      pop.classList.add('pick-cal-wide');
+      pop.innerHTML = `
+        <div class="pick-cal-head">
+          <button type="button" class="ym-nav" data-back aria-label="${isEnUi() ? 'Back to calendar' : '返回日历'}">‹</button>
+          <b class="pick-cal-label">${isEnUi() ? 'Year & month' : '选择年月'}</b>
+          <span class="pick-head-spacer"></span>
+        </div>
+        <div class="pick-cal-ym">${ymColsHtml({ startYear: ymStart, selYear: ymYear, selMonth: viewM, curYear: viewY })}</div>`;
+      return;
+    }
+    pop.classList.remove('pick-cal-wide');
+    const lead = (new Date(viewY, viewM - 1, 1).getDay() + 6) % 7;
+    const days = new Date(viewY, viewM, 0).getDate();
+    const prevDays = new Date(viewY, viewM - 1, 0).getDate();
+    const cells = [];
+    for (let i = lead; i > 0; i--) {
+      cells.push({ d: prevDays - i + 1, key: dayKey(viewM === 1 ? viewY - 1 : viewY, viewM === 1 ? 12 : viewM - 1, prevDays - i + 1), out: true });
+    }
+    for (let d = 1; d <= days; d++) cells.push({ d, key: dayKey(viewY, viewM, d), out: false });
+    const tail = (7 - (cells.length % 7)) % 7;
+    for (let d = 1; d <= tail; d++) {
+      cells.push({ d, key: dayKey(viewM === 12 ? viewY + 1 : viewY, viewM === 12 ? 1 : viewM + 1, d), out: true });
+    }
+    pop.innerHTML = `
+      <div class="pick-cal-head">
+        <button type="button" class="ym-nav" data-nav="-1" aria-label="${isEnUi() ? 'Previous month' : '上个月'}">‹</button>
+        <button type="button" class="pick-cal-title" data-ym aria-haspopup="dialog" aria-expanded="false" title="${isEnUi() ? 'Pick year & month' : '选择年月'}">${viewY}${isEnUi() ? ` ${MONTHS_EN[viewM - 1]}` : ` 年 ${viewM} 月`}<i class="pick-caret"></i></button>
+        <button type="button" class="ym-nav" data-nav="1" aria-label="${isEnUi() ? 'Next month' : '下个月'}">›</button>
+      </div>
+      <div class="pick-dow">${(isEnUi() ? DOW_EN : DOW_CN).map((t) => `<span>${t}</span>`).join('')}</div>
+      <div class="pick-days">${cells
+        .map(
+          (c) =>
+            `<button type="button" class="pick-day${c.out ? ' out' : ''}${c.key === value ? ' on' : ''}${
+              c.key === todayKey ? ' today' : ''
+            }" data-d="${c.key}">${c.d}</button>`
+        )
+        .join('')}</div>
+      <div class="pick-foot">${clearable ? `<button type="button" data-clear>${isEnUi() ? 'Clear' : '清除'}</button>` : '<span></span>'}<button type="button" data-today>${isEnUi() ? 'Today' : '今天'}</button></div>`;
+  };
+  render();
+  place();
+
+  pop.onclick = (e) => {
+    // 头部标题 / 返回：日历 ↔ 年月双栏
+    if (e.target.closest('[data-ym]')) {
+      mode = 'ym';
+      ymYear = viewY;
+      ymStart = viewY - 6;
+      render();
+      place();
+      pop.querySelector('.ym-btn.on')?.focus({ preventScroll: true });
+      return;
+    }
+    if (e.target.closest('[data-back]')) {
+      mode = 'day';
+      render();
+      place();
+      return;
+    }
+    // 年月视图：翻年组 / 选年 / 选月（选月即回到日历）
+    const shift = e.target.closest('[data-yshift]');
+    if (shift) {
+      ymStart += Number(shift.dataset.yshift) * 12;
+      render();
+      place();
+      return;
+    }
+    const yb = e.target.closest('[data-y]');
+    if (yb) {
+      ymYear = Number(yb.dataset.y);
+      render();
+      place();
+      pop.querySelector(`[data-y="${ymYear}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const mb = e.target.closest('[data-m]');
+    if (mb) {
+      viewY = ymYear;
+      viewM = Number(mb.dataset.m);
+      mode = 'day';
+      render();
+      place();
+      return;
+    }
+    const nav = e.target.closest('[data-nav]');
+    if (nav) {
+      const d = new Date(viewY, viewM - 1 + Number(nav.dataset.nav), 1);
+      viewY = d.getFullYear();
+      viewM = d.getMonth() + 1;
+      render();
+      place();
+      return;
+    }
+    const day = e.target.closest('[data-d]');
+    if (day) {
+      closePicker();
+      onPick?.(day.dataset.d);
+      return;
+    }
+    if (e.target.closest('[data-clear]')) {
+      closePicker();
+      onPick?.('');
+      return;
+    }
+    if (e.target.closest('[data-today]')) {
+      closePicker();
+      onPick?.(todayKey);
+    }
+  };
+  pop.querySelector('.pick-day.on')?.focus({ preventScroll: true });
+}
+
+/* ───────── 时间选择（时 / 分各一列滚轮） ─────────
+   两列各自滚动、选中项居中吸附（上下留白由 .pick-time-pad 撑出）；
+   滚动停下才改值，按「确定」或点「现在」才回传 "HH:MM"。 */
+
+const TIME_ITEM_H = 32; // 与 styles.css 的 .pick-time-item height 一致
+const TIME_VIEW_H = 160; // 与 styles.css 的 .pick-time-col height 一致
+
+export function mountTimePicker(anchor, { value = '', onPick } = {}) {
+  const now = new Date();
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
+  let hh = m ? Math.min(23, Number(m[1])) : now.getHours();
+  let mm = m ? Math.min(59, Number(m[2])) : now.getMinutes();
+
+  const opened = openPicker(anchor, { cls: 'ym-pop pick-time', label: isEnUi() ? 'Select time' : '选择时间' });
+  if (!opened) return;
+  const { pop, place } = opened;
+
+  const padH = (TIME_VIEW_H - TIME_ITEM_H) / 2;
+  const column = (count, sel, attr, label) => `
+    <div class="pick-time-col" data-col="${attr}" role="listbox" aria-label="${label}" tabindex="0">
+      <div class="pick-time-pad" style="height:${padH}px"></div>
+      ${Array.from({ length: count }, (_, i) => `<button type="button" class="pick-time-item${i === sel ? ' on' : ''}" data-${attr}="${i}">${pad2(i)}</button>`).join('')}
+      <div class="pick-time-pad" style="height:${padH}px"></div>
+    </div>`;
+
+  pop.innerHTML = `
+    <div class="pick-time-head"><span>${isEnUi() ? 'Hour' : '时'}</span><span>${isEnUi() ? 'Min' : '分'}</span></div>
+    <div class="pick-time-body">
+      ${column(24, hh, 'h', isEnUi() ? 'Hour' : '时')}
+      ${column(60, mm, 'm', isEnUi() ? 'Minute' : '分')}
+    </div>
+    <div class="pick-foot"><button type="button" data-now>${isEnUi() ? 'Now' : '现在'}</button><button type="button" data-ok>${isEnUi() ? 'Done' : '确定'}</button></div>`;
+  place();
+
+  const cols = { h: pop.querySelector('[data-col="h"]'), m: pop.querySelector('[data-col="m"]') };
+  const mark = (col, idx) => col.querySelectorAll('.pick-time-item').forEach((b, i) => b.classList.toggle('on', i === idx));
+  const jumpTo = (col, idx) => {
+    col.scrollTop = idx * TIME_ITEM_H;
+  };
+
+  jumpTo(cols.h, hh);
+  jumpTo(cols.m, mm);
+
+  // 滚动停下后再取值：scrollTop 按行高对齐，四舍五入就是选中项
+  const timers = { h: 0, m: 0 };
+  const watch = (key, max, set) => {
+    cols[key].addEventListener(
+      'scroll',
+      () => {
+        clearTimeout(timers[key]);
+        timers[key] = setTimeout(() => {
+          const i = Math.max(0, Math.min(max, Math.round(cols[key].scrollTop / TIME_ITEM_H)));
+          set(i);
+          mark(cols[key], i);
+        }, 90);
+      },
+      { passive: true }
+    );
+  };
+  watch('h', 23, (i) => (hh = i));
+  watch('m', 59, (i) => (mm = i));
+
+  // 键盘：列可聚焦，上下键逐格调
+  Object.entries(cols).forEach(([key, col]) => {
+    col.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const max = key === 'h' ? 23 : 59;
+      const next = Math.max(0, Math.min(max, (key === 'h' ? hh : mm) + (e.key === 'ArrowDown' ? 1 : -1)));
+      if (key === 'h') hh = next;
+      else mm = next;
+      mark(col, next);
+      jumpTo(col, next);
+    });
+  });
+
+  const commit = () => {
+    closePicker();
+    onPick?.(`${pad2(hh)}:${pad2(mm)}`);
+  };
+
+  pop.onclick = (e) => {
+    const h = e.target.closest('[data-h]');
+    if (h) {
+      hh = Number(h.dataset.h);
+      mark(cols.h, hh);
+      jumpTo(cols.h, hh);
+      return;
+    }
+    const mi = e.target.closest('[data-m]');
+    if (mi) {
+      mm = Number(mi.dataset.m);
+      mark(cols.m, mm);
+      jumpTo(cols.m, mm);
+      return;
+    }
+    if (e.target.closest('[data-now]')) {
+      const d = new Date();
+      hh = d.getHours();
+      mm = d.getMinutes();
+      mark(cols.h, hh);
+      mark(cols.m, mm);
+      jumpTo(cols.h, hh);
+      jumpTo(cols.m, mm);
+      commit();
+      return;
+    }
+    if (e.target.closest('[data-ok]')) commit();
+  };
+  cols.h.focus({ preventScroll: true });
+}
+
+/* ───────── 枚举选择（星期 / 每月几号） ───────── */
+
+/**
+ * options: [{ value, label }]，点选即回传；cols 决定网格列数。
+ * width 是浮层宽度（默认 268，和日历同宽）；2–5 项的短列表传窄一点，别空半张。
+ * align：选项文字居中（数字，默认）还是靠左（列表名、短语）。
+ */
+export function mountChoicePicker(anchor, { options = [], value = '', cols = 4, label = '', width = 268, align = 'center', onPick } = {}) {
+  const opened = openPicker(anchor, { cls: 'ym-pop pick-choice', label });
+  if (!opened) return;
+  const { pop, place } = opened;
+  const w = Math.max(120, Math.round(Number(width) || 268));
+  if (w !== 268) {
+    pop.style.width = `${w}px`;
+    pop.style.minWidth = '0'; // .pick-pop 的 min-width: 268px 不让 < 268 的窄版生效
+  }
+  if (align === 'left') pop.classList.add('pick-choice-left');
+  pop.innerHTML = `<div class="pick-choice-grid" style="grid-template-columns: repeat(${Math.max(1, Number(cols) || 4)}, minmax(0, 1fr))">${options
+    .map(
+      (o) =>
+        `<button type="button" class="ym-btn${String(o.value) === String(value) ? ' on' : ''}" data-v="${esc(String(o.value))}">${esc(o.label)}</button>`
+    )
+    .join('')}</div>`;
+  place();
+  pop.onclick = (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    closePicker();
+    onPick?.(b.dataset.v);
+  };
+  pop.querySelector('.ym-btn.on')?.focus({ preventScroll: true });
 }
 
 /**

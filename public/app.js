@@ -1,10 +1,29 @@
-// Trakt Manager 前端：无框架，hash 路由 + 服务端会话
+﻿// Trakt Manager 前端：无框架，hash 路由 + 服务端会话
 // 通用渲染片段（标题单元 / 海报 / 空态 / 错误态 / 分页器）在 ui.js
-import { esc, titleCell, posterImg, loadingBox, emptyState, errorState, bindRetry, mountPager, ICON } from './ui.js';
+import {
+  esc,
+  titleCell,
+  posterImg,
+  loadingBox,
+  emptyState,
+  errorState,
+  bindRetry,
+  mountPager,
+  mountMonthPicker,
+  mountDatePicker,
+  mountTimePicker,
+  mountChoicePicker,
+  closePicker,
+  ICON,
+} from './ui.js';
 import { initI18n, t, getLang, setLang, LANGS } from './i18n.js';
 
 // 前端版本：排查缓存时在控制台执行 __TM_VERSION__，对不上就是浏览器还在用旧文件
-window.__TM_VERSION__ = '20261101g';
+window.__TM_VERSION__ = '202611020251';
+
+// Trakt 官方 mark（取自 trakt.tv/favicon.svg 的矢量原样，48 格紫底白线）：
+// 站点 favicon（public/favicon.svg）与品牌方块共用同一份图形，改一处要一起改
+const TRAKT_MARK = `<svg viewBox="0 0 48 48" width="30" height="30" aria-hidden="true" focusable="false"><rect width="48" height="48" rx="10.8" fill="#6438d0"/><g transform="translate(6.24 6.24) scale(.5823)" fill="none" stroke="#fff" stroke-width="7.2" stroke-linecap="round" stroke-linejoin="round"><path d="M56 38.95A27.5 27.5 0 1 1 36.19 3.2"/><path d="M16.93 27.11l18.89 15.85M29.92 34.75L53.89 6.17M56.69 18.31L42.49 35.24M26.88 22.41l-3.52-2.96"/></g></svg>`;
 
 const state = {
   user: null,
@@ -12,11 +31,8 @@ const state = {
   query: new URLSearchParams(),
   // 观看历史：与追剧页同构的日历视图（按月缓存 + 选中日期 + 评分/剧评索引）
   history: { type: 'all', month: '', selected: '', data: null, cache: new Map(), aux: null },
-  ratings: { type: 'movies', page: 1, limit: 25, data: [], meta: null },
   favorites: { data: [], loaded: false, q: '', selected: new Set() },
-  lists: { data: [], loaded: false, open: new Set(), items: {} },
   watchlist: { data: [], q: '', selected: new Set() },
-  userLists: { data: null, error: '', promise: null }, // 详情页「加入列表」用
   search: { q: '', type: 'all', page: 1, limit: 20, data: [], meta: null, watchlist: null },
   library: { tab: 'watchlist' },
   calendar: { month: '', selected: '', data: null, cache: new Map() }, // 追剧页：整月排期缓存 + 选中日期
@@ -47,7 +63,7 @@ function apiHeaders(extra = {}) {
 
 /**
  * 提示条。两种用法：toast(msg, true) 表示错误；toast(msg, { undo }) 带「撤销」按钮。
- * 撤销按钮默认 12 秒后随提示条消失，超时就无法再撤销（期间用户可能又做了别的操作）。
+ * 撤销按钮 5 秒后随提示条消失，超时就无法再撤销（期间用户可能又做了别的操作）。
  */
 function toast(msg, opts = {}) {
   const o = typeof opts === 'boolean' ? { error: opts } : opts || {};
@@ -69,10 +85,10 @@ function toast(msg, opts = {}) {
     };
     el.appendChild(btn);
   }
-  toast.t = setTimeout(() => (el.className = 'toast'), o.ms || (o.undo ? 12000 : 2600));
+  toast.t = setTimeout(() => (el.className = 'toast'), o.ms || (o.undo ? 5000 : 2600));
 }
 
-/** 有限时间内可撤销的提示（默认 12s 后不可撤销） */
+/** 有限时间内可撤销的提示（默认 5s 后不可撤销） */
 function undoToast(msg, undo, ms) {
   toast(msg, { undo, ms });
 }
@@ -145,6 +161,9 @@ const fmtDur = (min) => {
   if (h > 0) return en ? `${h}h ${m % 60}m` : `${h} 小时 ${m % 60} 分`;
   return en ? `${m}m` : `${m} 分钟`;
 };
+
+/** 同上，但砍掉「0 分 / 0h / 0m」尾巴：12 小时 0 分 → 12 小时 */
+const fmtDurLite = (min) => fmtDur(min).replace(/\s(0 分|0h|0m)$/, '');
 
 const num = (n) => Number(n || 0).toLocaleString(isEn() ? 'en-US' : 'zh-CN');
 
@@ -231,24 +250,6 @@ function rowAttrs(kind, ids, season, number, title, act) {
     data-season="${season ?? ''}" data-number="${number ?? ''}" data-title="${esc(title || '')}"`;
 }
 
-/**
- * 海报网格里的一张卡片：片单 / 搜索 / 继续观看共用同一套结构与尺寸。
- * 上面封面（可带类型角标），下面标题 + 副标题 + 操作区；
- * 点击整卡进详情（bindRowClick 认 .media-card[data-kind]），按钮点击不触发。
- * opts.badge 封面左上角标，opts.subAttrs 副标题的本地化属性。
- */
-function mediaCard(kind, ids, title, sub = '', extra = '', season = '', number = '', opts = {}) {
-  // 卡片标题始终是影片/剧名（分集卡也显示剧名），本地化按 show 查
-  return `<div class="media-card" ${rowAttrs(kind, ids, season, number, title)}>
-    <div class="media-poster">${opts.badge ? `<span class="media-badge">${esc(opts.badge)}</span>` : ''}${thumb(kind === 'episode' ? 'show' : kind, ids)}</div>
-    <div class="media-body">
-      <div class="media-title" ${locAttrs(kind === 'episode' ? 'show' : kind, ids)} title="${esc(title || '')}">${esc(title || '未知')}</div>
-      <div class="media-sub" ${opts.subAttrs || ''}>${sub}</div>
-      ${extra}
-    </div>
-  </div>`;
-}
-
 /* ── 标题/简介本地化：按设置里的显示语言异步替换（服务端 art 缓存 30 天） ── */
 const locCache = new Map();
 
@@ -292,9 +293,14 @@ function parseLocKey(key) {
 function locTipData(el) {
   try {
     const o = JSON.parse(el.dataset.locTip || '{}');
-    return { day: o.p || '', keys: Array.isArray(o.k) ? o.k.filter(Boolean) : [] };
+    // t = 模板（%1、%2 依次替换成 k 里对应的译名）；不给就按日历那种「日期 · 名称、名称」拼
+    return {
+      day: o.p || '',
+      keys: Array.isArray(o.k) ? o.k.filter(Boolean) : [],
+      tpl: typeof o.t === 'string' ? o.t : '',
+    };
   } catch {
-    return { day: '', keys: [] };
+    return { day: '', keys: [], tpl: '' };
   }
 }
 
@@ -354,9 +360,13 @@ async function localize(root = document) {
 
   els.forEach((el) => locApply(el, locCache.get(el.dataset.locKey)));
   tips.forEach((el) => {
-    const { day, keys: list } = locTipData(el);
+    const { day, keys: list, tpl } = locTipData(el);
     const names = list.map((k) => locCache.get(k)?.title || '');
-    if (!names.length || names.some((n) => !n)) return;
+    if (!names.length || names.some((n) => !n)) return; // 有一个查不到就整条保持原文
+    if (tpl) {
+      el.title = tpl.replace(/%(\d+)/g, (m, i) => names[Number(i) - 1] ?? m);
+      return;
+    }
     el.title = day ? `${day} · ${names.join('、')}` : names.join('、');
   });
 }
@@ -449,35 +459,39 @@ async function watchedEpisodeMap(showTrakt) {
 
 const todayStr = () => ymd(new Date());
 
-/** 5 星半星控件：每颗星左右两半各代表 1 分，共 10 档；Trakt 评分仍写 1–10 的整数 */
-function ratingStarsHtml(rating, disabled = '') {
-  return Array.from({ length: 5 }, (_, i) => {
-    const left = i * 2 + 1;
-    const right = i * 2 + 2;
-    return `<span class="rating-star">
-      <button type="button" class="rating-half left${rating >= left ? ' on' : ''}" data-v="${left}" role="radio" aria-checked="${rating === left}" aria-label="${left} 分（半星）" title="${left} 分"${disabled}><span aria-hidden="true">★</span></button>
-      <button type="button" class="rating-half right${rating >= right ? ' on' : ''}" data-v="${right}" role="radio" aria-checked="${rating === right}" aria-label="${right} 分" title="${right} 分"${disabled}><span aria-hidden="true">★</span></button>
-    </span>`;
-  }).join('');
+/* 实心五角星：评分控件与「8.6」这类数值星标共用一条路径。
+   不用字符 ★——字重、基线、宽度都跟着字体走，中英文切换时会跳。 */
+const STAR_PATH = 'm12 3.7 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z';
+const starSvg = (cls = 'star-ico') =>
+  `<svg class="${cls}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" focusable="false"><path d="${STAR_PATH}"/></svg>`;
+
+/** facts 里允许放一段可信 HTML（内部拼好的星标），渲染时不再 esc */
+const raw = (html) => ({ __html: html });
+
+/** pick-field 按钮：显示文字和值分开存（文字给人看，值给提交用） */
+function setPickField(el, text, value) {
+  if (!el) return;
+  el.querySelector('.pick-field-txt').textContent = text;
+  el.dataset.value = String(value);
 }
 
-function listOptionsHtml() {
-  const s = state.userLists;
-  if (!s.data) return `<option value="">${s.error ? '列表读取失败' : '加载中…'}</option>`;
-  if (!s.data.length) return '<option value="">暂无自定义列表</option>';
-  return s.data
-    .map((l) => `<option value="${esc(l.ids.trakt)}">${esc(l.name)}（${num(l.item_count)}）</option>`)
-    .join('');
-}
+/**
+ * 动作 → 回写的状态。Trakt 写完立刻回读拿到的是旧值（列表索引有几秒延迟），
+ * 待看 / 收藏的新状态由这一次动作本身决定，别让按钮跟着旧值走。
+ */
+const ACTION_STAMP = {
+  watchlist_add: { watchlist: true },
+  watchlist_remove: { watchlist: false },
+  favorite_add: { favorite: true },
+  favorite_remove: { favorite: false },
+};
 
 function actionsInner(st, released, actType, canAct = true) {
   const count = st?.watched?.count || 0;
   const last = st?.watched?.last;
-  const rating = Number(st?.rating || 0);
   const wl = Boolean(st?.watchlist);
   const favorite = st?.favorite;
   const disabled = canAct ? '' : ' disabled';
-  const listsReady = Boolean(state.userLists.data?.length);
   return `
     <div class="op-row">
       <div class="op-row-top">
@@ -486,22 +500,6 @@ function actionsInner(st, released, actType, canAct = true) {
       </div>
       <div class="op-row-ctl">
         <button class="btn btn-sm ${count ? 'btn-danger' : 'btn-primary'}" id="btn-watch-toggle"${disabled}>${count ? '取消观看' : '标记已看'}</button>
-      </div>
-    </div>
-    <div class="op-row">
-      <div class="op-row-top">
-        <span class="op-label">评分</span>
-        <span class="op-value" id="st-rating">${rating ? `${rating} 分` : '未评分'}</span>
-      </div>
-      <div class="rating-control">
-        <div class="rating-row">
-          <div class="rating-picker" id="rating-picker" role="radiogroup" aria-label="评分（1–10 分，半星 1 分）">${ratingStarsHtml(rating, disabled)}</div>
-        </div>
-        <div class="rating-exact">
-          <input class="rating-input" id="rating-input" type="number" min="0" max="10" step="1" inputmode="numeric" placeholder="0–10" value="${rating || ''}" aria-label="精确评分（0 到 10 分，0 为清除）"${disabled} />
-          <button class="btn btn-sm" id="rating-apply"${disabled}>应用</button>
-          <button class="btn btn-sm rating-clear" id="rating-clear"${disabled}${rating ? '' : ' hidden'}>清除</button>
-        </div>
       </div>
     </div>
     <div class="op-row">
@@ -517,16 +515,6 @@ function actionsInner(st, released, actType, canAct = true) {
         <span class="op-value" id="st-fav">${favorite == null ? '状态未知' : favorite ? '已收藏' : '未收藏'}</span>
       </div>
       <div class="op-row-ctl"><button class="btn btn-sm" id="btn-fav"${!canAct || favorite == null ? ' disabled' : ''}>${favorite ? '移出收藏' : '加入收藏'}</button></div>
-    </div>
-    <div class="op-row">
-      <div class="op-row-top">
-        <span class="op-label">列表</span>
-        <span class="op-value" id="st-list">${state.userLists.error ? '列表读取失败' : listsReady ? '可加入自定义列表' : '选择后加入'}</span>
-      </div>
-      <div class="op-row-ctl list-picker-row">
-        <select id="list-pick" aria-label="选择要加入的列表"${disabled || !listsReady ? ' disabled' : ''}>${listOptionsHtml()}</select>
-        <button class="btn btn-sm" id="btn-list-add"${disabled || !listsReady ? ' disabled' : ''}>加入</button>
-      </div>
     </div>` : ''}`;
 }
 
@@ -562,8 +550,17 @@ function chooseWatchDate({ released = '', title = '', perEpisode = false, catchU
     ? '各集发布日（分别按各自首播日写入）'
     : `发布日${released ? `（${esc(released)}）` : '（暂无）'}`;
   return new Promise((resolve) => {
-    openModal(`<h3 class="watch-date-title">选择观看时间</h3>
-      <p class="watch-date-sub">${esc(title || '标记已看')}</p>
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+      closeModal(); // 统一走关闭入口；onClose 里的 finish(null) 会被 done 挡住
+    };
+    openModal({
+      title: '选择观看时间',
+      size: 'sm',
+      body: `<p class="watch-date-sub">${esc(title || '标记已看')}</p>
       <div class="watch-date-options" role="radiogroup" aria-label="观看时间">
         <label><input type="radio" name="watch-when" value="now" /> <span>现在</span></label>
         <label${canRelease ? '' : ' class="is-disabled"'}><input type="radio" name="watch-when" value="released"${canRelease ? '' : ' disabled'} /> <span>${releaseLabel}</span></label>
@@ -575,42 +572,42 @@ function chooseWatchDate({ released = '', title = '', perEpisode = false, catchU
       <div class="field" id="watch-custom-field" hidden>
         <label for="watch-custom-date">观看时间</label>
         <div class="watch-date-inputs">
-          <input type="date" id="watch-custom-date" value="${today}" />
-          <input type="time" id="watch-custom-time" step="60" value="${nowTime}" />
+          <button type="button" class="pick-field" id="watch-custom-date" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt">${today.replace(/-/g, '/')}</span>${ICON.calendar}</button>
+          <button type="button" class="pick-field" id="watch-custom-time" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt">${nowTime}</span>${ICON.clock}</button>
         </div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" data-close>取消</button>
-        <button class="btn btn-primary" id="watch-date-confirm" disabled>确认</button>
-      </div>`, 'modal-date');
-    let done = false;
-    const finish = (value) => {
-      if (done) return;
-      done = true;
-      document.removeEventListener('keydown', onKey);
-      $('#modal-root').innerHTML = '';
-      resolve(value);
-    };
-    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
-    document.addEventListener('keydown', onKey);
-    $('#modal-root').querySelector('.modal-backdrop').onclick = (e) => {
-      if (e.target.classList.contains('modal-backdrop')) finish(null);
-    };
-    $('#modal-root').querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => finish(null); });
+      </div>`,
+      actions: `<button class="btn" data-close>取消</button>
+        <button class="btn btn-primary" id="watch-date-confirm" disabled>确认</button>`,
+      // 取消按钮 / ESC / 点遮罩 / × 统一从这里返回 null
+      onClose: () => finish(null),
+    });
     const confirm = $('#watch-date-confirm');
     const customField = $('#watch-custom-field');
     const customDate = $('#watch-custom-date');
     const customTime = $('#watch-custom-time');
+    // 日期 / 时间都存在按钮自身，值由浮层回填，不用原生 date/time 控件
+    let customDay = today;
+    let customHm = nowTime;
+    const paintCustom = () => {
+      customDate.querySelector('.pick-field-txt').textContent = customDay.replace(/-/g, '/');
+      customTime.querySelector('.pick-field-txt').textContent = customHm;
+    };
     const sync = () => {
       const when = $('#modal-root').querySelector('input[name="watch-when"]:checked')?.value || '';
       customField.hidden = when !== 'custom';
-      confirm.disabled = !when || (when === 'custom' && (!customDate.value || !customTime.value));
+      confirm.disabled = !when || (when === 'custom' && (!customDay || !customHm));
     };
     $('#modal-root').querySelectorAll('input[name="watch-when"]').forEach((r) => {
       r.onchange = () => { sync(); if (r.value === 'custom' && r.checked) customDate.focus(); };
     });
-    customDate.oninput = sync;
-    customTime.oninput = sync;
+    customDate.onclick = () => mountDatePicker(customDate, {
+      value: customDay,
+      onPick: (v) => { customDay = v; paintCustom(); sync(); },
+    });
+    customTime.onclick = () => mountTimePicker(customTime, {
+      value: customHm,
+      onPick: (v) => { customHm = v; paintCustom(); sync(); },
+    });
     confirm.onclick = () => {
       const when = $('#modal-root').querySelector('input[name="watch-when"]:checked')?.value;
       if (!when) return;
@@ -618,9 +615,9 @@ function chooseWatchDate({ released = '', title = '', perEpisode = false, catchU
       const catchBox = $('#watch-catch-up');
       const extra = catchBox ? { includePrevious: Boolean(catchBox.checked) } : {};
       if (when === 'custom') {
-        const at = localDateTime(customDate.value, customTime.value);
-        if (!customDate.value || !at) return;
-        finish({ when, date: customDate.value, at, ...extra });
+        const at = localDateTime(customDay, customHm);
+        if (!customDay || !at) return;
+        finish({ when, date: customDay, at, ...extra });
         return;
       }
       finish({ when, ...extra });
@@ -632,8 +629,11 @@ function chooseWatchDate({ released = '', title = '', perEpisode = false, catchU
 function bindActions(ctx, st) {
   const { type, ids, season, number } = ctx;
   const after = async (j, action) => {
-    paintActions(ctx, j);
-    await ctx.onUpdated?.(j, action);
+    // 回读可能还是旧状态，动作语义优先
+    const patch = ACTION_STAMP[action];
+    const next = patch ? { ...j, ...patch } : j;
+    paintActions(ctx, next);
+    await ctx.onUpdated?.(next, action);
   };
   const toggle = $('#btn-watch-toggle');
   if (toggle) {
@@ -658,20 +658,24 @@ function bindActions(ctx, st) {
     };
   }
 
-  bindRating(ctx, st, after);
-
   const wl = $('#btn-wl');
   if (wl) {
     wl.onclick = async () => {
+      if (ctx.busy) return;
       const inList = Boolean(st?.watchlist);
-      wl.disabled = true;
+      ctx.busy = true;
+      // 点下去就把按钮翻过来：写接口来回要几秒，不能点了没反应；失败再翻回去
+      paintActions(ctx, { ...(st || {}), watchlist: !inList });
       try {
         const j = await runAction({ type, ids, action: inList ? 'watchlist_remove' : 'watchlist_add' });
         toast(inList ? '已移出待看' : '已加入待看');
+        if (inList) dropLibItem(ids, 'watchlist');
         await after(j, inList ? 'watchlist_remove' : 'watchlist_add');
       } catch (e) {
+        paintActions(ctx, st || {});
         toast(e.message, true);
-        wl.disabled = false;
+      } finally {
+        ctx.busy = false;
       }
     };
   }
@@ -679,148 +683,23 @@ function bindActions(ctx, st) {
   const fav = $('#btn-fav');
   if (fav) {
     fav.onclick = async () => {
+      if (ctx.busy) return;
       const favorited = Boolean(st?.favorite);
-      fav.disabled = true;
+      ctx.busy = true;
+      paintActions(ctx, { ...(st || {}), favorite: !favorited });
       try {
         const j = await runAction({ type, ids, action: favorited ? 'favorite_remove' : 'favorite_add' });
         toast(favorited ? '已移出收藏' : '已加入收藏');
+        if (favorited) dropLibItem(ids, 'favorites');
         await after(j, favorited ? 'favorite_remove' : 'favorite_add');
       } catch (e) {
+        paintActions(ctx, st || {});
         toast(e.message, true);
-        fav.disabled = false;
+      } finally {
+        ctx.busy = false;
       }
     };
   }
-
-  bindListPicker(ctx);
-}
-
-/** 评分星条即时重画：hover 预览也走这里，离开时用真实分复原 */
-function paintRatingPicker(value) {
-  const picker = $('#rating-picker');
-  if (!picker) return;
-  const v = Math.max(0, Math.min(10, Number(value) || 0));
-  picker.querySelectorAll('.rating-half').forEach((b) => {
-    const n = Number(b.dataset.v);
-    b.classList.toggle('on', n <= v);
-    b.setAttribute('aria-checked', String(n === v));
-  });
-  const read = $('#st-rating');
-  if (read) read.textContent = v ? `${v} 分` : '未评分';
-}
-
-function bindRating(ctx, st, after) {
-  const picker = $('#rating-picker');
-  if (!picker) return;
-  const { type, ids } = ctx;
-  const current = () => Number(st?.rating || 0);
-  const submit = async (value, sameClears = true) => {
-    const cur = current();
-    const clear = value === 0 || (sameClears && value === cur);
-    if (!clear && (!Number.isInteger(value) || value < 1 || value > 10)) return toast('评分需为 0–10 的整数', true);
-    if (clear && !cur) return;
-    try {
-      const j = clear ? await runAction({ type, ids, action: 'unrate' }) : await runAction({ type, ids, action: 'rate', rating: value });
-      toast(clear ? '已清除评分' : `已评分 ${value}`);
-      await after(j, clear ? 'unrate' : 'rate');
-    } catch (e) {
-      toast(e.message, true);
-      paintRatingPicker(cur);
-    }
-  };
-  picker.querySelectorAll('.rating-half').forEach((btn) => {
-    const v = Number(btn.dataset.v);
-    btn.onmouseenter = () => paintRatingPicker(v);
-    btn.onfocus = () => paintRatingPicker(v);
-    btn.onmouseleave = () => paintRatingPicker(current());
-    btn.onblur = () => paintRatingPicker(current());
-    btn.onclick = () => submit(v);
-  });
-  const input = $('#rating-input');
-  const commit = () => {
-    const raw = input?.value.trim();
-    if (!raw) return;
-    const v = Number(raw);
-    if (!Number.isInteger(v) || v < 0 || v > 10) return toast('评分需为 0–10 的整数', true);
-    submit(v, false);
-  };
-  $('#rating-apply')?.addEventListener('click', commit);
-  input?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') commit();
-  });
-  $('#rating-clear')?.addEventListener('click', () => submit(0));
-}
-
-/** 详情页「加入列表」：列表清单懒加载一次，之后各条目共用 */
-async function loadUserLists(force = false) {
-  const s = state.userLists;
-  if (s.data && !force) return s.data;
-  if (s.promise) return s.promise;
-  s.promise = api('/users/me/lists')
-    .then((r) => {
-      s.data = (r.data || []).filter(Boolean);
-      s.error = '';
-      return s.data;
-    })
-    .catch((e) => {
-      s.error = e.message;
-      throw e;
-    })
-    .finally(() => {
-      s.promise = null;
-    });
-  return s.promise;
-}
-
-function bindListPicker(ctx) {
-  const pick = $('#list-pick');
-  const add = $('#btn-list-add');
-  if (!pick || !add) return;
-  const canAct = Boolean(ctx.ids?.trakt || ctx.ids?.slug);
-  const seg = ctx.type === 'show' ? 'shows' : 'movies';
-  const ids = ctx.ids || {};
-  const hint = $('#st-list');
-  const fill = () => {
-    pick.innerHTML = listOptionsHtml();
-    const empty = !canAct || !state.userLists.data?.length;
-    pick.disabled = empty;
-    add.disabled = empty;
-    if (!hint) return;
-    if (state.userLists.error) hint.textContent = '列表读取失败';
-    else if (state.userLists.data && !state.userLists.data.length) hint.textContent = '还没有自定义列表';
-    else if (state.userLists.data) hint.textContent = '可加入自定义列表';
-  };
-  fill();
-  if (!state.userLists.data) {
-    loadUserLists()
-      .then(() => {
-        if ($('#list-pick') === pick) fill();
-      })
-      .catch(() => {
-        if (hint) hint.textContent = '列表读取失败';
-      });
-  }
-  add.onclick = async () => {
-    const listId = pick.value;
-    const list = (state.userLists.data || []).find((l) => String(l.ids.trakt) === String(listId));
-    if (!list) return toast('请选择列表', true);
-    add.disabled = true;
-    add.textContent = '加入中…';
-    try {
-      await api(`/users/me/lists/${listId}/items`, { method: 'POST', body: { [seg]: [{ ids }] } });
-      list.item_count = Number(list.item_count || 0) + 1;
-      if (hint) hint.textContent = `已加入「${list.name}」`;
-      add.textContent = '已加入';
-      pick.querySelectorAll('option').forEach((o) => {
-        if (String(o.value) === String(listId)) o.textContent = `${list.name}（${num(list.item_count)}）`;
-      });
-      toast(`已加入「${list.name}」`);
-    } catch (e) {
-      add.disabled = false;
-      add.textContent = '加入';
-      toast(e.message, true);
-    }
-  };
 }
 
 async function runAction(payload) {
@@ -856,71 +735,99 @@ function renderLogin(step = 'email', email = '') {
   <div class="login-wrap">
     <div class="card login-card">
       <div class="brand" style="padding:0">
-        <div class="brand-mark">T</div>
+        <div class="brand-mark">${TRAKT_MARK}</div>
         <div class="brand-text">
-          <div class="brand-name">Trakt Manager</div>
-          <div class="brand-sub">数据管理面板</div>
+          <div class="brand-name">Trakt</div>
+          <div class="brand-sub">${t('观影中心')}</div>
         </div>
       </div>
 
+      <p class="login-hint" id="login-hint"></p>
+
       <div id="step-email">
-        <h2>邮箱登录</h2>
-        <p class="login-hint">使用 Trakt 账号邮箱登录，会向邮箱发送 6 位验证码。无需创建 OAuth 应用，不占用授权名额。</p>
         <div class="field">
           <label for="login-email">邮箱</label>
-          <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" value="${esc(email)}" />
+          <div class="input-wrap">
+            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email"
+                   autocapitalize="off" spellcheck="false" value="${esc(email)}" />
+            <button type="button" class="input-x" id="btn-clear-mail" aria-label="清空" hidden></button>
+          </div>
+          <span id="mail-err" class="err-text"></span>
         </div>
         <button class="btn btn-primary btn-block" id="btn-send">发送验证码</button>
       </div>
 
       <div id="step-otp" hidden>
-        <h2>输入验证码</h2>
-        <p class="login-hint" id="otp-hint"></p>
         <div class="field">
-          <label for="login-otp">6 位验证码</label>
-          <input id="login-otp" class="otp-input" type="tel" inputmode="numeric" autocomplete="one-time-code"
-                 maxlength="6" placeholder="——————" spellcheck="false" />
+          <label for="login-otp">验证码</label>
+          <div class="otp-box" id="otp-box">
+            <input id="login-otp" class="otp-input" type="tel" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" spellcheck="false" />
+            <div class="otp-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          </div>
           <div class="input-foot">
             <span id="otp-err" class="err-text"></span>
-            <button type="button" class="link-btn" id="btn-paste">粘贴验证码</button>
           </div>
         </div>
         <button class="btn btn-primary btn-block" id="btn-verify">登录</button>
-        <div style="height:8px"></div>
-        <button class="btn btn-block" id="btn-back">换邮箱 / 重新发送</button>
+        <div class="login-alt">
+          <button type="button" class="link-btn" id="btn-edit-mail">修改邮箱</button>
+          <span class="login-alt-dot" aria-hidden="true">·</span>
+          <button type="button" class="link-btn" id="btn-resend">重新发送验证码</button>
+        </div>
       </div>
 
-      <div class="divider"></div>
-      <p class="note">
-        登录走的是 Trakt 网页版的官方认证链路（<b>auth.trakt.tv</b> 邮箱验证码 → 会话 → OIDC 授权码 → 令牌），
-        凭证只保存在本服务端，浏览器仅持有 HttpOnly 会话 cookie。令牌约 7 天有效，会自动轮换续期。
-      </p>
+      <p class="login-signup">还没有账号？<a class="login-signup-link" href="https://trakt.tv/signin" target="_blank" rel="noopener noreferrer">创建账号</a></p>
     </div>
   </div>`;
+
+  const hintEl = $('#login-hint');
+  const mailInput = $('#login-email');
+  const otpInput = $('#login-otp');
+  const otpBox = $('#otp-box');
+  const otpCells = [...otpBox.querySelectorAll('.otp-cells > span')];
+
+  // 透明 input 只负责收字符（原生粘贴 / 一次一码自动填充 / 退格都还在），格子负责显示与高亮当前位
+  const paintOtp = () => {
+    const v = otpInput.value;
+    otpCells.forEach((cell, i) => {
+      cell.textContent = v[i] || '';
+      cell.classList.toggle('is-filled', Boolean(v[i]));
+      cell.classList.toggle('is-active', i === v.length);
+    });
+  };
+  const syncMailClear = () => { $('#btn-clear-mail').hidden = !mailInput.value; };
 
   const showOtp = (mail) => {
     $('#step-email').hidden = true;
     $('#step-otp').hidden = false;
-    $('#otp-hint').innerHTML = `验证码已发送至 <b>${esc(mail)}</b>，5 分钟内有效。若没收到请检查垃圾邮件。`;
+    // 邮箱夹在 <b> 里：i18n 按文本节点分片翻译，整段带变量进不了字典
+    hintEl.innerHTML = esc(t('验证码已发送至')) + ` <b>${esc(mail)}</b>` + esc(t('，5 分钟内有效。'));
     $('#otp-err').textContent = '';
-    const input = $('#login-otp');
-    input.value = '';
-    input.focus();
-    setTimeout(() => input.focus(), 60);
+    otpInput.value = '';
+    paintOtp();
+    otpInput.focus();
+    setTimeout(() => { if (!$('#step-otp').hidden) otpInput.focus(); }, 60);
   };
+  // 回到邮箱步骤时全选原值：改邮箱不用一位位删，直接重打
   const showEmail = (mail) => {
     $('#step-otp').hidden = true;
     $('#step-email').hidden = false;
-    if (mail) $('#login-email').value = mail;
-    $('#login-email').focus();
+    hintEl.textContent = t('数据来自 Trakt.tv 官方 API，用 Trakt 账号邮箱登录即可。');
+    if (mail != null) mailInput.value = mail;
+    syncMailClear();
+    mailInput.focus();
+    mailInput.select();
   };
 
   const send = async () => {
-    const emailVal = $('#login-email').value.trim();
+    const emailVal = mailInput.value.trim();
     if (!emailVal) return toast('请输入邮箱', true);
     const btn = $('#btn-send');
+    const resend = $('#btn-resend');
     btn.disabled = true;
     btn.textContent = '发送中…';
+    if (resend) resend.disabled = true;
     try {
       const r = await fetch('/api/auth/start', {
         method: 'POST',
@@ -933,10 +840,12 @@ function renderLogin(step = 'email', email = '') {
       showOtp(emailVal);
     } catch (e) {
       toast(e.message, true);
-      $('#otp-err').textContent = e.message;
+      // 邮箱步骤和验证码步骤都会触发发送，错误要落在当前可见的那一步里
+      ($('#step-otp').hidden ? $('#mail-err') : $('#otp-err')).textContent = e.message;
     } finally {
       btn.disabled = false;
       btn.textContent = '发送验证码';
+      if (resend) resend.disabled = false;
     }
   };
 
@@ -970,36 +879,38 @@ function renderLogin(step = 'email', email = '') {
   };
 
   $('#btn-send').onclick = send;
-  $('#login-email').onkeydown = (e) => e.key === 'Enter' && send();
-  $('#btn-back').onclick = () => showEmail($('#login-email').value.trim());
+  mailInput.addEventListener('input', () => {
+    $('#mail-err').textContent = '';
+    syncMailClear();
+  });
+  // 必须用语句体：箭头表达式在非回车键时返回 false，事件处理函数返回 false 等价 preventDefault，
+  // 整个输入框会被锁死（打字、退格全部无效）
+  mailInput.onkeydown = (e) => {
+    if (e.key === 'Enter') send();
+  };
+  $('#btn-clear-mail').onclick = () => {
+    mailInput.value = '';
+    syncMailClear();
+    mailInput.focus();
+  };
+  $('#btn-edit-mail').onclick = () => showEmail(mailInput.value.trim());
+  $('#btn-resend').onclick = send;
 
-  const otpInput = $('#login-otp');
   // 过滤非数字（输入法、粘贴、拖入都走这里）
   otpInput.addEventListener('input', () => {
     const digits = otpInput.value.replace(/\D/g, '').slice(0, 6);
     if (otpInput.value !== digits) otpInput.value = digits;
     $('#otp-err').textContent = '';
+    paintOtp();
     if (digits.length === 6) verify();
   });
+  otpBox.addEventListener('click', () => otpInput.focus());
+  otpInput.addEventListener('focus', () => otpBox.classList.add('is-focus'));
+  otpInput.addEventListener('blur', () => otpBox.classList.remove('is-focus'));
   otpInput.onkeydown = (e) => {
     if (e.key === 'Enter') verify();
   };
   $('#btn-verify').onclick = verify;
-  // 键盘在预览面板/内嵌 webview 里被拦截时的兜底
-  $('#btn-paste').onclick = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      const digits = (text || '').replace(/\D/g, '').slice(0, 6);
-      if (digits.length === 6) {
-        otpInput.value = digits;
-        await verify();
-      } else {
-        $('#otp-err').textContent = '剪贴板里没有 6 位数字';
-      }
-    } catch {
-      $('#otp-err').textContent = '无法读取剪贴板，请手动输入';
-    }
-  };
 
   if (step === 'otp' && email) showOtp(email);
   else showEmail(email);
@@ -1026,8 +937,8 @@ const NAV = [
 const LEGACY_ROUTES = {
   progress: 'tracking',
   calendar: 'tracking',
-  history: 'records?tab=history',
-  ratings: 'records?tab=ratings',
+  history: 'records',
+  ratings: 'records',
   lists: 'library',
   favorites: 'library?tab=favorites',
   stats: 'dashboard',
@@ -1241,10 +1152,10 @@ function shell() {
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">T</div>
+        <div class="brand-mark">${TRAKT_MARK}</div>
         <div class="brand-text">
-          <div class="brand-name">Trakt Manager</div>
-          <div class="brand-sub">数据管理面板</div>
+          <div class="brand-name">Trakt</div>
+          <div class="brand-sub">${t('观影中心')}</div>
         </div>
       </div>
       <nav class="nav">${NAV.map(([k, ic, label]) => `<div class="nav-item" data-nav="${k}"><span class="ic">${ic}</span>${label}</div>`).join('')}</nav>
@@ -1352,7 +1263,7 @@ function head(title, sub, actions = '') {
 }
 
 /**
- * 全站唯一的「导出」控件：记录 / 评分管理 / 片单都用同一颗按钮 + 同一份菜单，
+ * 全站唯一的「导出」控件：记录 / 片单都用同一颗按钮 + 同一份菜单，
  * 避免一处是下拉、一处是直跳的样式分叉。
  * urlFor(format) 返回下载地址；返回空串表示当前不能导出（提示由调用方自己发）。
  */
@@ -1578,7 +1489,7 @@ function renderDetailHero() {
       facts: [
         ep.first_aired ? fmtDate(ep.first_aired) : '播出时间未知',
         ep.runtime ? `${ep.runtime} 分钟` : '',
-        ep.rating ? `★ ${ep.rating}` : '',
+        ep.rating ? raw(`${starSvg()}${esc(ep.rating)}`) : '',
       ],
       overview: ep.overview,
       returnable: true,
@@ -1591,7 +1502,7 @@ function renderDetailHero() {
       facts: [
         meta.year || '',
         meta.runtime ? `${meta.runtime} 分钟` : '',
-        meta.rating ? `★ ${meta.rating}` : '',
+        meta.rating ? raw(`${starSvg()}${esc(meta.rating)}`) : '',
         meta.votes ? `${num(meta.votes)} 人评分` : '',
       ],
       overview: meta.overview,
@@ -1610,13 +1521,13 @@ function renderDetailHero() {
       </div>
       ${info.logoSub ? `<div class="detail-page-sub detail-sub-logo">${esc(info.logoSub)}</div>` : ''}
       ${info.sub && info.sub !== info.title ? `<div class="detail-page-sub detail-sub-plain">${esc(info.sub)}</div>` : ''}
-      <div class="detail-page-facts">${info.facts.filter(Boolean).map((f) => `<span>${esc(f)}</span>`).join('<i>·</i>')}</div>
+      <div class="detail-page-facts">${info.facts.filter(Boolean).map((f) => `<span>${typeof f === 'string' ? esc(f) : f.__html}</span>`).join('<i>·</i>')}</div>
       ${target.type === 'movie' || target.type === 'show' ? (meta.genres || []).length ? `<div class="detail-page-genres">${meta.genres.map((g) => `<span class="chip">${esc(g)}</span>`).join('')}</div>` : '' : ''}
       <p class="detail-page-overview">${esc(info.overview || '暂无简介')}</p>
       <div class="detail-page-links">
-        ${info.returnable ? `<button class="btn btn-sm detail-link" id="detail-show-info" type="button">${D_ICON_INFO}返回剧集简介</button>` : ''}
-        ${meta.links?.tmdb ? `<a class="btn btn-sm detail-link" href="${esc(meta.links.tmdb)}" target="_blank" rel="noreferrer">${D_ICON_EXT}TMDB</a>` : ''}
-        ${meta.links?.trakt ? `<a class="btn btn-sm detail-link" href="${esc(meta.links.trakt)}" target="_blank" rel="noreferrer">${D_ICON_EXT}Trakt</a>` : ''}
+        ${info.returnable ? `<div class="seg"><button class="seg-btn" id="detail-show-info" type="button">${D_ICON_INFO}返回剧集简介</button></div>` : ''}
+        ${meta.links?.tmdb ? `<div class="seg"><a class="seg-btn" href="${esc(meta.links.tmdb)}" target="_blank" rel="noreferrer">${D_ICON_EXT}TMDB</a></div>` : ''}
+        ${meta.links?.trakt ? `<div class="seg"><a class="seg-btn" href="${esc(meta.links.trakt)}" target="_blank" rel="noreferrer">${D_ICON_EXT}Trakt</a></div>` : ''}
       </div>
     </div>`;
   const showInfo = $('#detail-show-info');
@@ -1641,6 +1552,10 @@ function renderDetailActions(info = {}) {
 }
 
 const EPISODE_PAGE_SIZE = 50;
+
+/** 季的显示名：特别篇 / 第 N 季（select 换 pick-field 后浮动层里不再带「· 12 集」，窄列放不下） */
+const seasonText = (n) => (Number(n) === 0 ? '特别篇' : `第 ${n} 季`);
+const EPISODE_STATUS_LABEL = { all: '全部状态', unwatched: '未看', watched: '已看', unaired: '未播' };
 
 function episodePageFor(number) {
   return Math.floor(Math.max(0, Number(number) - 1) / EPISODE_PAGE_SIZE);
@@ -1705,6 +1620,8 @@ function paintEpisodeManager(v) {
   $('#episode-result-count', root).textContent = `${filtered.length} 集`;
   const watched = v.episodes.filter((ep) => v.watched.get(`S${v.season}E${ep.number}`)).length;
   $('#season-progress', root).textContent = `本季已看 ${watched}/${v.episodes.length}`;
+  // 状态筛选是浮层按钮，选中后要自己把文字改过来（原 select 靠 option 的 selected 自动回显）
+  setPickField($('#episode-status', root), EPISODE_STATUS_LABEL[v.episodeStatus || 'all'], v.episodeStatus || 'all');
   const pages = $('#episode-pages', root);
   pages.hidden = pageCount <= 1;
   pages.innerHTML = pageCount <= 1 ? '' : Array.from({ length: pageCount }, (_, i) => {
@@ -1864,16 +1781,9 @@ function renderDetailBody() {
         </div>
       </div>
       <div class="episode-toolbar">
-        <label class="episode-season-control"><span>季</span><select id="detail-season-select" aria-label="选择季">
-          ${v.seasons.map((s) => `<option value="${s.number}"${Number(s.number) === Number(v.season) ? ' selected' : ''}>${Number(s.number) === 0 ? '特别篇' : `第 ${s.number} 季`} · ${s.episode_count || 0} 集</option>`).join('')}
-        </select></label>
+        <label class="episode-season-control"><span>季</span><button type="button" class="pick-field" id="detail-season-select" aria-label="选择季" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span><i class="pick-caret"></i></button></label>
         <label class="episode-search"><span>${ICON.search}</span><input id="episode-query" type="search" value="${esc(v.episodeQuery || '')}" placeholder="搜索集数或标题" autocomplete="off" /></label>
-        <select id="episode-status" aria-label="筛选观看状态">
-          <option value="all"${(v.episodeStatus || 'all') === 'all' ? ' selected' : ''}>全部状态</option>
-          <option value="unwatched"${v.episodeStatus === 'unwatched' ? ' selected' : ''}>未看</option>
-          <option value="watched"${v.episodeStatus === 'watched' ? ' selected' : ''}>已看</option>
-          <option value="unaired"${v.episodeStatus === 'unaired' ? ' selected' : ''}>未播</option>
-        </select>
+        <button type="button" class="pick-field" id="episode-status" aria-label="筛选观看状态" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span><i class="pick-caret"></i></button>
         <div class="episode-batch">
           <button type="button" class="btn btn-sm" data-season-all="watch">整季已看</button>
           <button type="button" class="btn btn-sm" data-season-all="unwatch">整季取消</button>
@@ -1902,13 +1812,23 @@ function renderDetailBody() {
   root.querySelectorAll('[data-season-all]').forEach((btn) => {
     btn.onclick = () => runSeasonAll(btn.dataset.seasonAll, btn);
   });
-  $('#detail-season-select', root).onchange = (e) => {
-    v.episodeQuery = '';
-    v.episodeStatus = 'all';
-    v.episodePage = 0;
-    detailSelection(v).clear(); // 换季就换一批候选，旧选择不该跨季残留
-    selectDetailTarget('show', Number(e.target.value));
-  };
+  const seasonBtn = $('#detail-season-select', root);
+  setPickField(seasonBtn, seasonText(v.season), v.season);
+  seasonBtn.onclick = () =>
+    mountChoicePicker(seasonBtn, {
+      value: String(v.season),
+      cols: 3,
+      width: 264,
+      label: '选择季',
+      options: v.seasons.map((s) => ({ value: String(s.number), label: seasonText(s.number) })),
+      onPick: (val) => {
+        v.episodeQuery = '';
+        v.episodeStatus = 'all';
+        v.episodePage = 0;
+        detailSelection(v).clear(); // 换季就换一批候选，旧选择不该跨季残留
+        selectDetailTarget('show', Number(val));
+      },
+    });
   $('#episode-selection-watch', root).onclick = () => runSelectedWatch($('#episode-selection-watch', root));
   $('#episode-selection-clear', root).onclick = () => {
     detailSelection(v).clear();
@@ -1929,11 +1849,21 @@ function renderDetailBody() {
     v.episodePage = 0;
     paintEpisodeManager(v);
   };
-  $('#episode-status', root).onchange = (e) => {
-    v.episodeStatus = e.target.value;
-    v.episodePage = 0;
-    paintEpisodeManager(v);
-  };
+  const statusBtn = $('#episode-status', root);
+  setPickField(statusBtn, EPISODE_STATUS_LABEL[v.episodeStatus || 'all'], v.episodeStatus || 'all');
+  statusBtn.onclick = () =>
+    mountChoicePicker(statusBtn, {
+      value: v.episodeStatus || 'all',
+      cols: 2,
+      width: 220,
+      label: '筛选观看状态',
+      options: Object.keys(EPISODE_STATUS_LABEL).map((k) => ({ value: k, label: EPISODE_STATUS_LABEL[k] })),
+      onPick: (val) => {
+        v.episodeStatus = val;
+        v.episodePage = 0;
+        paintEpisodeManager(v);
+      },
+    });
   root.addEventListener('click', (e) => {
     // 勾选框只切换多选，不再触发「选中该集看详情」
     const check = e.target.closest('.episode-check');
@@ -2186,12 +2116,10 @@ async function renderDetailPage() {
 
 PAGES.detail = renderDetailPage;
 
-/* ───────── 记录（历史 + 评分） ───────── */
+/* ───────── 记录（历史） ───────── */
 
-/** 按 ?tab=ratings 切换历史 / 评分两个视图，默认历史 */
 PAGES.records = async () => {
-  const ratings = state.query.get('tab') === 'ratings';
-  await (ratings ? PAGES.ratings() : PAGES.history());
+  await PAGES.history();
 };
 
 /* ───────── 搜索：能搜到就能直接操作 ───────── */
@@ -2223,7 +2151,7 @@ PAGES.search = async () => {
   if (state.query.toString()) history.replaceState(null, '', '#/search');
 
   $('#view').innerHTML =
-    head('搜索', 'Trakt 全站搜索：点条目进详情，可直接加入待看', '') +
+    head('搜索', '搜索 Trakt 全站，可直接加入待看', '') +
     `<section class="card episode-manager search-manager">
       <div class="episode-toolbar search-bar">
         <div class="seg" id="s-type" role="group" aria-label="按类型筛选">
@@ -2231,7 +2159,7 @@ PAGES.search = async () => {
         </div>
         <label class="episode-search search-input">
           <span aria-hidden="true">${ICON.search}</span>
-          <input id="s-q" type="search" value="${esc(st.q)}" placeholder="搜索电影或剧集，中英文都行"
+          <input id="s-q" type="search" value="${esc(st.q)}" placeholder="搜索电影或剧集"
             autocomplete="off" spellcheck="false" aria-label="搜索电影或剧集">
         </label>
         <div class="episode-toolbar-pager">
@@ -2303,7 +2231,7 @@ function renderSearchEmpty() {
   if (hint) hint.textContent = '';
   box.innerHTML = `<div class="lib-empty">${emptyState('输入关键词开始搜索', {
     icon: 'search',
-    hint: '结果来自 Trakt 全站，不受「只能操作已看内容」的限制',
+    hint: '支持中英文片名与原名',
   })}</div>`;
 }
 
@@ -2409,7 +2337,7 @@ function searchRow(it, i, inWatchlist) {
       <div class="lib-name" ${locAttrs(kind, ids)}>${esc(m.title || '未知')}</div>
       <div class="lib-sub">${esc(sub)}</div>
     </td>
-    <td class="lib-score-cell"><span class="lib-num">${rating ? `★ ${rating.toFixed(1)}` : '—'}</span></td>
+    <td class="lib-score-cell"><span class="lib-num${rating ? ' num-star' : ''}">${rating ? `${starSvg()}${rating.toFixed(1)}` : '—'}</span></td>
     <td class="lib-ops-cell"><div class="lib-ops">${action}</div></td>
   </tr>`;
 }
@@ -2451,7 +2379,7 @@ async function renderCalendarPage() {
   host.innerHTML = `<div class="cal-wrap">
     <div class="card cal-card">
       <div class="cal-head">
-        <b id="cal-title"></b>
+        <button type="button" class="cal-title ym-trigger" id="cal-title" aria-haspopup="dialog" aria-expanded="false" title="${isEn() ? 'Pick month' : '选择年月'}"></button>
         <span class="sub" id="cal-sub"></span>
         <div class="spacer"></div>
         <button class="btn btn-sm" id="cal-today">今天</button>
@@ -2459,9 +2387,7 @@ async function renderCalendarPage() {
         <button class="btn btn-sm" id="cal-next" title="下一月">›</button>
       </div>
       <div class="cal-week">${(isEn() ? ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] : CAL_WEEK).map((w) => `<span>${w}</span>`).join('')}</div>
-      <div class="cal-grid" id="cal-grid">${loadingBox('正在读取播出排期…')}</div>
-      <div class="cal-foot"><i class="cal-dot on"></i><span>已播出</span><i class="cal-dot"></i><span>待播出</span>
-        <div class="spacer"></div><span class="sub">来自「在看」列表 · 悬停格子可看当天剧名</span></div>
+      <div class="cal-grid" id="cal-grid">${loadingBox()}</div>
     </div>
     <div class="card cal-side" id="cal-side">${loadingBox()}</div>
   </div>`;
@@ -2469,6 +2395,16 @@ async function renderCalendarPage() {
   const step = (n) => {
     const [y, m] = st.month.split('-').map(Number);
     setQuery({ m: monthKey(new Date(y, m - 1 + n, 1)), d: '' });
+  };
+  // 点标题选年月（和 ‹ › 翻页并存）：选完回到该月 1 号，避免保留旧日期
+  const titleBtn = $('#cal-title');
+  titleBtn.onclick = () => {
+    const [y, m] = st.month.split('-').map(Number);
+    mountMonthPicker(titleBtn, {
+      year: y,
+      month: m,
+      onPick: (yy, mm) => setQuery({ m: monthKey(new Date(yy, mm - 1, 1)), d: '' }),
+    });
   };
   $('#cal-prev').onclick = () => step(-1);
   $('#cal-next').onclick = () => step(1);
@@ -2484,7 +2420,7 @@ async function loadCalendar() {
   try {
     let data = st.cache.get(st.month);
     if (!data) {
-      grid.innerHTML = loadingBox('正在读取播出排期…');
+      grid.innerHTML = loadingBox();
       const tz = -new Date().getTimezoneOffset();
       data = await getJson(`/api/calendar?month=${encodeURIComponent(st.month)}&tz=${tz}`);
       st.cache.set(st.month, data);
@@ -2598,10 +2534,7 @@ function renderCalendarDay() {
     return;
   }
 
-  side.innerHTML =
-    head +
-    `<div class="cal-list">${list.map(calItem).join('')}</div>
-     <div class="cal-note">播出日期按 Trakt 排期展示，实际平台上线时间可能有出入。</div>`;
+  side.innerHTML = head + `<div class="cal-list">${list.map(calItem).join('')}</div>`;
 
   side.querySelectorAll('[data-cday-item]').forEach((el) => {
     el.onclick = (ev) => {
@@ -2732,6 +2665,20 @@ function ovShiftMonth(y, m, step) {
 }
 
 /**
+ * 继续观看的两类数据都由服务端合成（/api/continue）：
+ * 播放器上报的续播点 + 最近追的剧里「下一集已播」的条目。
+ * 老版本服务端没有这个端点时退回透传 /sync/playback（只会有续播点）。
+ */
+async function ovContinueRows() {
+  try {
+    const r = await getJson('/api/continue');
+    if (Array.isArray(r.items)) return r.items;
+  } catch {}
+  const x = await api('/sync/playback', { query: { extended: 'full' } }).catch(() => ({ data: [] }));
+  return (x.data || []).map((it) => ({ ...it, source: 'playback' }));
+}
+
+/**
  * 概览数据全部由服务端聚合（/api/stats）：一年的观看记录可能有几千条，
  * 浏览器逐页拉再自己算既慢、又会被页数上限截断。
  * 服务端按用户时区把记录折成「天 / 小时」，这里只把对象还原成 Map 给渲染用。
@@ -2743,13 +2690,8 @@ async function ovLoad(period, month) {
   if (hit && Date.now() - hit.at < OV_TTL) return hit.data;
 
   const q = `period=${encodeURIComponent(period)}&month=${encodeURIComponent(month)}&tz=${tz}`;
-  // 续播点和统计一起拉：两张卡同屏出现，串行会白等一个来回
-  const [r, cont] = await Promise.all([
-    getJson(`/api/stats?${q}`),
-    api('/sync/playback', { query: { extended: 'full' } })
-      .then((x) => x.data || [])
-      .catch(() => []),
-  ]);
+  // 继续观看和统计一起拉：两张卡同屏出现，串行会白等一个来回
+  const [r, cont] = await Promise.all([getJson(`/api/stats?${q}`), ovContinueRows()]);
   const data = {
     start: r.start,
     end: r.end,
@@ -2763,11 +2705,13 @@ async function ovLoad(period, month) {
     truncated: !!r.truncated,
     week: { ...(r.week || {}), days: new Map(Object.entries(r.week?.days || {})) },
     fav: r.fav || null,
-    // Trakt 的续播点：progress 是百分比，paused_at 决定先后，取最近停下的几条。
-    // 同一部剧可能有多集的续播点，只留最近那一集，免得一张小卡被同一部剧占满。
+    // 两类条目：source=playback 是续播点（progress 百分比），source=next 是「下一集」。
+    // activity_at 统一成「最近一次观看 / 暂停时间」，同一部剧可能有多条，只留最近那一条。
     continue: (Array.isArray(cont) ? cont : [])
       .filter((x) => x && (x.movie || x.episode))
-      .sort((a, b) => String(b.paused_at || '').localeCompare(String(a.paused_at || '')))
+      .sort((a, b) =>
+        String(b.activity_at || b.paused_at || '').localeCompare(String(a.activity_at || a.paused_at || ''))
+      )
       .filter((() => {
         const seen = new Set();
         return (x) => {
@@ -2940,8 +2884,7 @@ function ovWeekCard(agg, cmp) {
 
 function ovFeelCard(rated, label) {
   const head = `<div class="ov-head"><b>观影感受</b><span class="sub">${esc(label)}</span></div>`;
-  const foot = `<div class="ov-foot"><span class="sub">共 ${rated.count} 次感受</span>
-    <a class="btn btn-sm" href="#/records?tab=ratings">查看全部</a></div>`;
+  const foot = `<div class="ov-foot"><span class="sub">共 ${rated.count} 次感受</span></div>`;
   if (!rated.count) {
     return `<div class="card ov-card ov-feel">${head}
       <div class="ov-feel-empty">所选时段暂无观影感受</div>${foot}</div>`;
@@ -2985,31 +2928,24 @@ function ovAgo(iso) {
   return fmtDate(iso);
 }
 
-/** 还剩多少：进度换算成分钟，缺 runtime 就不显示（别硬编一个数） */
-function ovLeft(runtime, pct) {
-  const rt = Number(runtime) || 0;
-  if (!rt || pct >= 100) return '';
-  const m = Math.max(1, Math.round((rt * (100 - pct)) / 100));
-  if (isEn()) return m < 60 ? `${m}m left` : m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m left` : `${Math.floor(m / 60)}h left`;
-  if (m < 60) return `剩 ${m} 分`;
-  return m % 60 ? `剩 ${Math.floor(m / 60)} 时 ${m % 60} 分` : `剩 ${Math.floor(m / 60)} 时`;
-}
-
 /**
- * 继续观看：Trakt 续播点按暂停时间倒序，卡片内滚轮浏览。
- * 每行给「标题 / 分集名 / SxxExx · 时长 · 多久前 / 进度条」，右侧百分比 + 剩余时长。
+ * 继续观看：续播点（有进度）与「下一集」（还没开始看）混排，按最近活动时间倒序，卡片内滚轮浏览。
+ * 两种来源统一成「一条轨道 + 右侧 剩余/共 X」：
+ *   续播点 → 轨道按百分比填充，右侧「剩 41 分钟 / 共 46 分钟」
+ *   下一集 → 轨道空着，右侧「未开始 / 共 46 分钟」
+ * 轨道下面一行灰字是「还剩 N 集 · ≈X 小时」（服务端 aired - completed × 平均时长）。
  */
 function ovContinueCard(list) {
   const rows = (Array.isArray(list) ? list : []).slice(0, 40);
   const head = `<div class="ov-head">
     <div class="ov-head-main"><b>继续观看</b>${rows.length ? `<span class="sub">${rows.length} 条</span>` : ''}</div>
-    <span class="sub">按暂停时间倒序</span>
+    <span class="sub">按最近观看倒序</span>
   </div>`;
   if (!rows.length) {
     return `<div class="card ov-card ov-cont">${head}
       <div class="ov-empty">
-        <b>没有看到一半的条目</b>
-        <span class="sub">播放器上报续播点后会出现在这里</span>
+        <b>没有待看的条目</b>
+        <span class="sub">在看的剧有新一集播出时会出现在这里</span>
       </div>
     </div>`;
   }
@@ -3020,33 +2956,124 @@ function ovContinueCard(list) {
       const ids = mv ? mv.ids || {} : it.show?.ids || {};
       const kind = mv ? 'movie' : 'show';
       const title = mv ? mv.title : it.show?.title || ep.title || '未知条目';
-      const pct = Math.max(0, Math.min(100, Math.round(Number(it.progress) || 0)));
+      // 服务端给的 source=next 表示「这部剧还有一集没看」，没有播放进度
+      const upNext = it.source === 'next';
+      const pct = upNext ? 0 : Math.max(0, Math.min(100, Math.round(Number(it.progress) || 0)));
       const code = !mv && ep.season != null && ep.number != null ? `S${pad2(ep.season)}E${pad2(ep.number)}` : '电影';
-      const when = ovAgo(it.paused_at);
       const runtime = Number(ep.runtime || mv?.runtime || it.show?.runtime) || 0;
-      const left = ovLeft(runtime, pct);
-      const epName = !mv ? String(ep.title || '').trim() : '';
-      const total = runtime ? fmtDur(runtime) : '';
-      const whenFull = it.paused_at ? fmtDateTime(it.paused_at) : '';
+      const total = runtime ? fmtDurLite(runtime) : '';
+      const leftMin = upNext || !runtime ? 0 : Math.max(0, Math.round((runtime * (100 - pct)) / 100));
+      // 右侧窄栏就两行：进度百分比 / 这集还剩多久；下一集没有进度，改成「未开始 / 共 26 分」
+      const sideMain = upNext ? (isEn() ? 'Not started' : '未开始') : `${pct}%`;
+      const sideSub = upNext
+        ? total
+          ? `${isEn() ? '' : '共 '}${total}${isEn() ? ' total' : ''}`
+          : ''
+        : leftMin
+          ? `${isEn() ? '' : '剩 '}${fmtDurLite(leftMin).replace(/分钟$/, '分')}${isEn() ? ' left' : ''}`
+          : isEn()
+            ? 'Watched'
+            : '已看完';
+      // 「第 7 集」「Episode 7」这类通用集名和 S01E07 完全重复，不占第二行
+      const rawName = !mv ? String(ep.title || '').trim() : '';
+      const epName = /^(第\s*\d+\s*集|episode\s*\d+)$/i.test(rawName) ? '' : rawName;
+      const remain = !mv ? Math.max(0, Number(it.remain) || 0) : 0;
+      const last = it.last_episode;
+      const lastCode = upNext && last && last.season != null && last.number != null ? `S${pad2(last.season)}E${pad2(last.number)}` : '';
+      // 续播点看「多久前停的」，下一集看「这集什么时候上的」
+      const aired = upNext ? ovAgo(ep.first_aired) : '';
+      const when = upNext ? (aired ? (isEn() ? `aired ${aired}` : `${aired}更新`) : '') : ovAgo(it.paused_at);
+      const whenFull = upNext
+        ? ep.first_aired
+          ? `${isEn() ? 'Aired' : '更新于'} ${fmtDateTime(ep.first_aired)}`
+          : ''
+        : it.paused_at
+          ? fmtDateTime(it.paused_at)
+          : '';
       const href = detailHref({ type: mv ? 'movie' : 'episode', ids, season: ep.season, number: ep.number });
-      const tip = [title, epName, code, total ? `共 ${total}` : '', whenFull].filter(Boolean).join(' · ');
-      return `<a class="ov-cont-item" href="${href}" title="${esc(tip)}">
+      // 悬停提示按显示语言重拼：%1 = 剧名、%2 = 集名，localize() 拿到译名后替换
+      const tipKeys = [locKeyFor(kind, ids)];
+      if (epName) tipKeys.push(locKeyFor('episode', it.show?.ids || ids, ep.season, ep.number));
+      const tipTpl = [
+        '%1',
+        epName ? '%2' : '',
+        code,
+        total ? `${isEn() ? 'runtime' : '共'} ${total}` : '',
+        upNext ? (isEn() ? 'not started' : '未开始') : `${pct}%`,
+        remain ? (isEn() ? `${remain} eps left` : `还剩 ${remain} 集`) : '',
+        lastCode ? `${isEn() ? 'last watched' : '上次看到'} ${lastCode}` : '',
+        whenFull,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return `<a class="ov-cont-item" href="${href}" title="${esc(tipTpl)}" data-loc-tip="${esc(
+        JSON.stringify({ k: tipKeys, t: tipTpl })
+      )}">
       <span class="ov-cont-art">${posterImg(`/api/poster?${artQuery(kind, ids)}`, 'ov-cont-poster')}</span>
       <span class="ov-cont-meta">
         <span class="ov-cont-title" ${locAttrs(kind, ids)}>${esc(title)}</span>
-        ${epName ? `<span class="ov-cont-ep" ${locAttrs('episode', it.show?.ids || ids, ep.season, ep.number)}>${esc(epName)}</span>` : ''}
-        <span class="sub">${esc([code, total, when].filter(Boolean).join(' · '))}</span>
+        ${
+          epName
+            ? `<span class="ov-cont-ep" ${locAttrs('episode', it.show?.ids || ids, ep.season, ep.number)}>${esc(epName)}</span>`
+            : ''
+        }
+        <span class="ov-cont-sub">${[esc(code), esc(total), esc(when)].filter(Boolean).join(' · ')}</span>
         <span class="ov-cont-bar"><i style="width:${pct}%"></i></span>
       </span>
-      <span class="ov-cont-side">
-        <b class="ov-cont-pct">${pct}%</b>
-        ${left ? `<span class="ov-cont-left">${esc(left)}</span>` : ''}
-      </span>
+      <span class="ov-cont-side"><b class="ov-cont-pct">${esc(sideMain)}</b>${
+        sideSub ? `<span class="ov-cont-left">${esc(sideSub)}</span>` : ''
+      }</span>
     </a>`;
     })
     .join('');
   return `<div class="card ov-card ov-cont">${head}<div class="ov-cont-list">${items}</div></div>`;
 }
+
+/**
+ * 继续观看卡与同一行左侧的日历卡等高：列表只吃卡片剩余高度，放不下就在卡片内滚动，
+ * 行数不设上限（能放几行放几行）。底部那截「不够一整行」的缝有两种处理：
+ * 差得不多就均摊进行距正好铺到卡片底边（既不留白也不露毛边），差得多就直接铺满、
+ * 末行露半截当「还有更多」的提示。单列（窄屏）没有同行卡，就让卡片按内容自然长高。
+ */
+function fitContList(root = document) {
+  root.querySelectorAll?.('.ov-cont-list').forEach((list) => {
+    const card = list.closest('.ov-cont');
+    if (!card) return;
+    const cs = getComputedStyle(card);
+    const head = card.querySelector('.ov-head');
+    const chrome =
+      (parseFloat(cs.paddingTop) || 0) +
+      (parseFloat(cs.paddingBottom) || 0) +
+      (head ? head.getBoundingClientRect().height + (parseFloat(getComputedStyle(head).marginBottom) || 0) : 0);
+    // 先把列表压扁（并回到设计稿行距），卡片高度就回到「同行另一张卡的自然高度」，
+    // 再把这部分空间还给列表
+    list.style.rowGap = '';
+    list.style.maxHeight = '0px';
+    const avail = card.clientHeight - chrome;
+    if (avail <= 0) {
+      list.style.maxHeight = ''; // 单列没有同行卡：按内容自然长高，交给页面滚动
+      return;
+    }
+    const gap = parseFloat(getComputedStyle(list).rowGap) || 8;
+    const kids = [...list.children];
+    let used = 0;
+    let fit = 0; // 能完整放下的行数
+    for (let i = 0; i < kids.length; i += 1) {
+      const add = (i ? gap : 0) + kids[i].getBoundingClientRect().height;
+      if (used + add > avail) break;
+      used += add;
+      fit = i + 1;
+    }
+    const extra = avail - used;
+    if (extra >= 12 && extra <= 40 && fit > 1) {
+      // 差小半行：把这截缝均摊进行距，正好铺到卡片底边，底部不留白也不露毛边
+      const g = Math.floor((gap + extra / (fit - 1)) * 100) / 100;
+      list.style.rowGap = `${g}px`;
+    }
+    list.style.maxHeight = `${Math.floor(extra >= 12 ? avail : used || avail)}px`;
+  });
+}
+window.addEventListener('resize', () => fitContList());
 
 function ovGenreCard(agg, label) {
   const head = `<div class="ov-head">
@@ -3156,11 +3183,11 @@ PAGES.dashboard = async () => {
         </div>
         <span class="ov-period-sep" aria-hidden="true"></span>
         <button type="button" class="seg-btn ov-step" data-ovstep="-1" title="上一${unit}" aria-label="上一${unit}">‹</button>
-        <b class="ov-monthlabel">${esc(label)}</b>
+        <button type="button" class="ov-monthlabel ym-trigger" id="ov-pick" aria-haspopup="dialog" aria-expanded="false" title="${isEn() ? 'Pick month' : '选择年月'}">${esc(label)}</button>
         <button type="button" class="seg-btn ov-step" data-ovstep="1" title="下一${unit}" aria-label="下一${unit}">›</button>
       </div>`) +
     `<div class="ov-grid" id="ov-root">
-      <div class="card ov-card">${loadingBox('正在读取观看记录…')}</div>
+      <div class="card ov-card">${loadingBox()}</div>
       <div class="card ov-card">${loadingBox()}</div>
     </div>`;
 
@@ -3190,13 +3217,27 @@ PAGES.dashboard = async () => {
       setQuery({ m: cur.period === 'year' ? `${cur.y + step}-01` : ovShiftMonth(cur.y, cur.m, step) });
     };
   });
+  // 点标签选年月：年度视图只选年，月度视图先选年后选月；‹ › 与「今天」保持原样
+  const pickBtn = $('#ov-pick');
+  if (pickBtn) {
+    pickBtn.onclick = () => {
+      const cur = ovCur();
+      mountMonthPicker(pickBtn, {
+        year: cur.y,
+        month: cur.m,
+        withMonth: cur.period !== 'year',
+        onPick: (y, m) => setQuery({ m: cur.period === 'year' ? `${y}-01` : monthKey(new Date(y, m - 1, 1)) }),
+      });
+    };
+  }
 
   try {
     const data = await ovLoad(period, month);
     const root = $('#ov-root');
     if (!root) return;
     root.innerHTML = ovRender(period, y, m, data);
-    localize(root);
+    localize(root); // 先把译名换好再量高度，中文英文行高不一样
+    fitContList(root);
     // 月历点某天：只换「单日观看」那张卡，不重跑路由
     root.querySelectorAll('[data-ovday]').forEach((el) => {
       el.onclick = () => {
@@ -3222,11 +3263,9 @@ PAGES.history = async () => {
           .map(([v, l]) => `<button data-type="${v}" class="${st.type === v ? 'active' : ''}">${l}</button>`)
           .join('')}
       </div>
-      <div class="seg" role="group" aria-label="导出">${exportMenu('hist-export')}</div>
-      <div class="seg" role="group" aria-label="评分管理"><button id="hist-ratings">评分管理</button></div>`) +
+      <div class="seg" role="group" aria-label="导出">${exportMenu('hist-export')}</div>`) +
     '<div id="page-body"><div id="hist-cal"></div></div>';
 
-  $('#hist-ratings').onclick = () => setQuery({ tab: 'ratings' });
   $('#hist-type-seg')
     .querySelectorAll('[data-type]')
     .forEach((btn) => {
@@ -3272,7 +3311,7 @@ async function renderHistoryCalendar() {
   host.innerHTML = `<div class="cal-wrap">
     <div class="card cal-card">
       <div class="cal-head">
-        <b id="cal-title"></b>
+        <button type="button" class="cal-title ym-trigger" id="cal-title" aria-haspopup="dialog" aria-expanded="false" title="${isEn() ? 'Pick month' : '选择年月'}"></button>
         <span class="sub" id="cal-sub"></span>
         <div class="spacer"></div>
         <button class="btn btn-sm" id="cal-today">今天</button>
@@ -3280,9 +3319,7 @@ async function renderHistoryCalendar() {
         <button class="btn btn-sm" id="cal-next" title="下一月">›</button>
       </div>
       <div class="cal-week">${(isEn() ? ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] : CAL_WEEK).map((w) => `<span>${w}</span>`).join('')}</div>
-      <div class="cal-grid" id="cal-grid">${loadingBox('正在读取观看历史…')}</div>
-      <div class="cal-foot"><i class="cal-dot on"></i><span>已观看</span>
-        <div class="spacer"></div><span class="sub">来自 Trakt 观看历史 · 悬停格子可看当天片名</span></div>
+      <div class="cal-grid" id="cal-grid">${loadingBox()}</div>
     </div>
     <div class="card cal-side" id="cal-side">${loadingBox()}</div>
   </div>`;
@@ -3290,6 +3327,16 @@ async function renderHistoryCalendar() {
   const step = (n) => {
     const [y, m] = st.month.split('-').map(Number);
     setQuery({ m: monthKey(new Date(y, m - 1 + n, 1)), d: '' });
+  };
+  // 点标题选年月（和 ‹ › 翻页并存）：选完回到该月 1 号，避免保留旧日期
+  const titleBtn = $('#cal-title');
+  titleBtn.onclick = () => {
+    const [y, m] = st.month.split('-').map(Number);
+    mountMonthPicker(titleBtn, {
+      year: y,
+      month: m,
+      onPick: (yy, mm) => setQuery({ m: monthKey(new Date(yy, mm - 1, 1)), d: '' }),
+    });
   };
   $('#cal-prev').onclick = () => step(-1);
   $('#cal-next').onclick = () => step(1);
@@ -3305,7 +3352,7 @@ async function loadHistoryCalendar() {
   try {
     let data = st.cache.get(st.month);
     if (!data) {
-      grid.innerHTML = loadingBox('正在读取观看历史…');
+      grid.innerHTML = loadingBox();
       data = await fetchHistoryMonth(st.month, st.type);
       st.cache.set(st.month, data);
     }
@@ -3674,296 +3721,6 @@ async function restoreHistory(items) {
   }
 }
 
-/* ───────── 评分 ───────── */
-
-const TYPE_LABEL = { movies: '电影', shows: '剧集', episodes: '分集', seasons: '季' };
-
-PAGES.ratings = async () => {
-  const st = state.ratings;
-  $('#view').innerHTML =
-    head('评分管理', '改分即时生效，0 分等于删除评分；下方汇总同一分类下的剧评', `
-      <div class="seg" role="group" aria-label="导出">${exportMenu('rating-export')}</div>
-      <div class="seg" role="group" aria-label="返回记录"><button id="rating-history">${ICON.back} 返回记录</button></div>`) +
-    `<div id="page-body">
-      <div class="card">
-        <div class="hint-bar">
-          <div class="seg" role="group" aria-label="按类型筛选">
-            ${Object.entries(TYPE_LABEL)
-              .map(([k, v]) => `<button class="${st.type === k ? 'active' : ''}" data-rtype="${k}">${v}</button>`)
-              .join('')}
-          </div>
-          <div style="flex:1"></div>
-          <span class="sub">共 <b id="rating-count">—</b> 条</span>
-        </div>
-        <div class="table-wrap" id="rating-body">${loadingBox()}</div>
-        <div class="pager" id="rating-pager" hidden></div>
-      </div>
-      <div class="card" style="margin-top:14px">
-        <div class="hint-bar">
-          <b>剧评</b>
-          <div style="flex:1"></div>
-          <span class="sub" id="comment-count">—</span>
-        </div>
-        <div id="comment-body">${loadingBox()}</div>
-      </div>
-    </div>`;
-
-  $('#rating-history').onclick = () => setQuery({ tab: '' });
-  document.querySelectorAll('[data-rtype]').forEach((el) => {
-    el.onclick = () => {
-      st.type = el.dataset.rtype;
-      st.page = 1;
-      st.commentShown = 20;
-      PAGES.ratings();
-    };
-  });
-  mountExportMenu('rating-export', (format) => `/api/export?kind=ratings&type=${st.type}&format=${format}`);
-  await Promise.all([loadRatings(), loadRatingComments()]);
-};
-
-async function loadRatings() {
-  const st = state.ratings;
-  if (!$('#rating-body')) return; // 切到别的 tab 了
-  $('#rating-body').innerHTML = loadingBox();
-  try {
-    const r = await api(`/users/me/ratings/${st.type}`, { query: { page: st.page, limit: st.limit } });
-    st.data = r.data || [];
-    st.meta = r.pagination;
-    $('#rating-count').textContent = num(r.pagination?.itemCount || st.data.length);
-    renderRatings();
-  } catch (e) {
-    showError($('#rating-body'), e, loadRatings);
-  }
-}
-
-function ratingItem(it) {
-  if (it.movie) return { title: it.movie.title, sub: it.movie.year, ids: it.movie.ids, kind: 'movies', art: 'movie', artIds: it.movie.ids };
-  if (it.show) return { title: it.show.title, sub: it.show.year, ids: it.show.ids, kind: 'shows', art: 'show', artIds: it.show.ids };
-  if (it.episode) {
-    return {
-      title: `${it.show?.title || ''}`,
-      sub: `S${String(it.episode.season).padStart(2, '0')}E${String(it.episode.number).padStart(2, '0')} · ${it.episode.title || ''}`,
-      ids: it.episode.ids,
-      kind: 'episodes',
-      art: 'episode',
-      artIds: it.show?.ids || {},
-      act: { type: 'episode', ids: it.episode.ids },
-      season: it.episode.season,
-      number: it.episode.number,
-    };
-  }
-  if (it.season) {
-    return { title: `${it.show?.title || ''} 第 ${it.season.number} 季`, sub: '', ids: it.season.ids, kind: 'seasons', art: 'show', artIds: it.show?.ids || {}, act: { type: 'season', ids: it.season.ids } };
-  }
-  return { title: '—', sub: '', ids: {}, kind: 'movies', art: 'movie', artIds: {} };
-}
-
-function renderRatings() {
-  const st = state.ratings;
-  if (!st.data.length) {
-    $('#rating-body').innerHTML = emptyState('还没有评分记录', { icon: 'star' });
-    $('#rating-pager').hidden = true;
-    return;
-  }
-  $('#rating-body').innerHTML = `<table>
-    <thead><tr><th class="col-poster"></th><th>标题</th><th style="width:90px">评分</th><th style="width:120px">改分</th><th style="width:70px"></th><th style="text-align:right;width:110px">评分时间</th></tr></thead>
-    <tbody>${st.data
-      .map((it, i) => {
-        const m = ratingItem(it);
-        return `<tr ${rowAttrs(m.art, m.artIds, m.season, m.number, m.title, m.act)}>
-          <td class="col-poster">${thumb(m.art === 'episode' ? 'show' : m.art, m.artIds)}</td>
-          <td>${titleCell(m.title, m.sub, locAttrs(m.art, m.artIds, m.season, m.number))}</td>
-          <td><span class="rating-badge">${esc(it.rating)}</span></td>
-          <td>
-            <select class="rate-set" data-idx="${i}">
-              <option value="">—</option>
-              ${Array.from({ length: 10 }, (_, k) => 10 - k)
-                .map((v) => `<option value="${v}" ${Number(it.rating) === v ? 'selected' : ''}>${v}</option>`)
-                .join('')}
-            </select>
-          </td>
-          <td><button class="btn btn-sm btn-danger rate-del" data-idx="${i}">删除</button></td>
-          <td class="num" style="text-align:right;white-space:nowrap">${esc(fmtDateTime(it.rated_at))}</td>
-        </tr>`;
-      })
-      .join('')}</tbody></table>`;
-
-  bindRowClick($('#rating-body'));
-  localize($('#rating-body'));
-
-  document.querySelectorAll('.rate-set').forEach((sel) => {
-    sel.onchange = async () => {
-      const idx = Number(sel.dataset.idx);
-      const it = st.data[idx];
-      const m = ratingItem(it);
-      const rating = Number(sel.value);
-      if (!rating) return;
-      try {
-        await api('/sync/ratings', { method: 'POST', body: { [m.kind]: [{ ids: m.ids, rating }] } });
-        it.rating = rating;
-        toast(`已改为 ${rating} 分`);
-        renderRatings();
-      } catch (e) {
-        toast(e.message, true);
-      }
-    };
-  });
-  document.querySelectorAll('.rate-del').forEach((btn) => {
-    btn.onclick = async () => {
-      const idx = Number(btn.dataset.idx);
-      const it = st.data[idx];
-      const m = ratingItem(it);
-      try {
-        await api('/sync/ratings', { method: 'POST', body: { [m.kind]: [{ ids: m.ids, rating: 0 }] } });
-        toast('评分已删除');
-        await loadRatings();
-      } catch (e) {
-        toast(e.message, true);
-      }
-    };
-  });
-
-  mountPager($('#rating-pager'), st.meta || { page: 1, pageCount: 1, itemCount: st.data.length }, (p) => {
-    st.page = p;
-    loadRatings();
-  }, num);
-}
-
-/* ── 评分管理页的剧评汇总 ── */
-
-/** 评论条目属于哪个分类（episode 同时带 show，必须先判） */
-function commentKindOf(it) {
-  if (it.episode) return 'episodes';
-  if (it.season) return 'seasons';
-  if (it.movie) return 'movies';
-  if (it.show) return 'shows';
-  return '';
-}
-
-/** 评论指向的条目：标题 / 副标题 / 详情页参数 / 对应评分键 */
-function commentTarget(it) {
-  if (it.episode) {
-    const e = it.episode;
-    return {
-      title: it.show?.title || e.title || '—',
-      sub: `S${String(e.season).padStart(2, '0')}E${String(e.number).padStart(2, '0')}${e.title ? ` · ${e.title}` : ''}`,
-      kind: 'episode',
-      ids: it.show?.ids || {},
-      season: e.season,
-      number: e.number,
-      ratingKind: 'episode',
-      ratingKey: e.ids?.trakt,
-    };
-  }
-  if (it.season) {
-    return {
-      title: it.show?.title || '—',
-      sub: `第 ${it.season.number} 季`,
-      kind: 'show',
-      ids: it.show?.ids || {},
-      ratingKind: '',
-      ratingKey: '',
-    };
-  }
-  if (it.movie) {
-    return {
-      title: it.movie.title,
-      sub: it.movie.year,
-      kind: 'movie',
-      ids: it.movie.ids || {},
-      ratingKind: 'movie',
-      ratingKey: it.movie.ids?.trakt,
-    };
-  }
-  if (it.show) {
-    return {
-      title: it.show.title,
-      sub: it.show.year,
-      kind: 'show',
-      ids: it.show.ids || {},
-      ratingKind: 'show',
-      ratingKey: it.show.ids?.trakt,
-    };
-  }
-  return null;
-}
-
-async function loadRatingComments() {
-  if (!$('#comment-body')) return;
-  $('#comment-body').innerHTML = loadingBox();
-  try {
-    const aux = await histAux();
-    state.ratings.comments = aux.rawComments || [];
-    renderRatingComments();
-  } catch (e) {
-    if ($('#comment-body')) showError($('#comment-body'), e, loadRatingComments);
-  }
-}
-
-function renderRatingComments() {
-  const st = state.ratings;
-  const box = $('#comment-body');
-  if (!box) return;
-  const aux = state.history.aux;
-  const list = (st.comments || [])
-    .filter((it) => commentKindOf(it) === st.type)
-    .sort((a, b) => String(b.comment?.created_at || '').localeCompare(String(a.comment?.created_at || '')));
-  const count = $('#comment-count');
-  if (count) count.textContent = `共 ${num(list.length)} 条`;
-
-  if (!list.length) {
-    box.innerHTML = emptyState('这个分类还没有剧评', { icon: 'edit', hint: '在 Trakt 网页或详情页写过的剧评会汇总到这里' });
-    return;
-  }
-
-  const shown = Math.min(st.commentShown || 20, list.length);
-  const page = list.slice(0, shown);
-  box.innerHTML = `<div class="cmt-list">${page
-    .map((it, i) => {
-      const t = commentTarget(it);
-      const c = it.comment || {};
-      const rating = (t?.ratingKind && aux?.ratings?.[t.ratingKind]?.get(t.ratingKey)?.rating) || 0;
-      return `<div class="cmt-item" data-cmt="${i}">
-        <div class="cmt-head">
-          <b class="cmt-title" ${locAttrs(t?.kind, t?.ids, t?.season, t?.number)}>${esc(t?.title || '—')}</b>
-          ${rating ? `<span class="rating-badge">${esc(rating)}</span>` : ''}
-          ${c.spoiler ? '<span class="chip red">剧透</span>' : ''}
-          ${c.review ? '<span class="chip">长评</span>' : ''}
-          <span class="sub cmt-date">${esc(fmtDateTime(c.created_at))}</span>
-        </div>
-        ${t?.sub ? `<div class="cmt-sub">${esc(t.sub)}</div>` : ''}
-        <div class="cmt-text clamp">${esc(String(c.comment || '').trim())}</div>
-        <button class="cmt-toggle" data-cmt-toggle="${i}">展开全文</button>
-      </div>`;
-    })
-    .join('')}</div>
-  ${list.length > shown ? `<div class="cmt-more"><button class="btn btn-sm" id="cmt-more">再显示 ${num(Math.min(20, list.length - shown))} 条</button></div>` : ''}`;
-
-  box.querySelectorAll('[data-cmt-toggle]').forEach((b) => {
-    b.onclick = (ev) => {
-      ev.stopPropagation();
-      const text = b.closest('.cmt-item').querySelector('.cmt-text');
-      const clamped = text.classList.toggle('clamp');
-      b.textContent = clamped ? '展开全文' : '收起';
-    };
-  });
-  box.querySelectorAll('[data-cmt]').forEach((el) => {
-    el.onclick = (ev) => {
-      if (ev.target.closest('button')) return;
-      const t = commentTarget(page[Number(el.dataset.cmt)]);
-      if (t) openDetail({ type: t.kind, ids: t.ids, season: t.season, number: t.number });
-    };
-  });
-  const more = $('#cmt-more');
-  if (more) {
-    more.onclick = () => {
-      st.commentShown = shown + 20;
-      renderRatingComments();
-    };
-  }
-  localize(box);
-}
-
 /* ───────── 片单：待看 / 收藏 共用一个表格，切换在工具条里 ───────── */
 
 const LIB_TABS = [
@@ -4015,14 +3772,13 @@ PAGES.library = async () => {
   // 老链接带 ?tab=favorites 时直接落在收藏；其余一律看待看
   if (state.query.get('tab') === 'favorites') state.library.tab = 'favorites';
   $('#view').innerHTML =
-    head('片单', '待看、收藏与自定义列表；切换在表格顶部，勾选后可批量处理', '') +
+    head('片单', '待看与收藏；切换在表格顶部，勾选后可批量处理', '') +
     `<section class="card episode-manager lib-manager">
       <div class="episode-toolbar lib-bar">
         <div class="seg" id="lib-seg">
           ${LIB_TABS.map(([v, l]) => `<button data-lib="${v}" class="${state.library.tab === v ? 'active' : ''}">${l}<span class="chip" id="lib-n-${v}">–</span></button>`).join('')}
         </div>
         <label class="episode-search lib-search"><span>${ICON.search}</span><input id="lib-q" type="search" placeholder="筛选标题…" aria-label="筛选标题" value="${esc(libState().q)}" autocomplete="off"></label>
-        <label class="media-pick"><input type="checkbox" class="checkbox lib-all-check" aria-label="全选当前结果"> 全选</label>
         <div class="episode-toolbar-pager">
           <span class="lib-count" id="lib-count">—</span>
           <div class="seg" role="group" aria-label="片单操作">${exportMenu('lib-export')}</div>
@@ -4036,14 +3792,8 @@ PAGES.library = async () => {
         </div>
       </div>
       <div class="episode-table-wrap lib-table-wrap" id="lib-body">${loadingBox()}</div>
-    </section>
-    <div class="card" style="margin-top:16px">
-      <div class="hint-bar"><b>自定义列表</b><div style="flex:1"></div><span class="sub">点击展开查看条目</span>
-        <button class="btn btn-primary btn-sm" id="list-new">新建列表</button></div>
-      <div id="lists-body">${loadingBox()}</div>
-    </div>`;
+    </section>`;
 
-  $('#list-new').onclick = () => createListDialog();
   $('#lib-seg')
     .querySelectorAll('[data-lib]')
     .forEach((btn) => {
@@ -4076,7 +3826,7 @@ PAGES.library = async () => {
   mountExportMenu('lib-export', (format) => `/api/export?kind=watchlist&format=${format}`);
   syncLibraryExport();
 
-  await Promise.all([loadWatchlist(), loadFavorites(), loadLists()]);
+  await Promise.all([loadWatchlist(), loadFavorites()]);
 };
 
 /** 收藏没有导出端点，切到收藏时把整块导出控件藏起来 */
@@ -4092,7 +3842,7 @@ function libRow(it, i, isFav, st) {
   const art = e.kind === 'movie' ? 'movie' : 'show';
   const date = e.date ? fmtDate(e.date) : '—';
   const full = e.date ? fmtDateTime(e.date) : '';
-  const score = e.rating ? `★ ${e.rating.toFixed(1)}` : '—';
+  const score = e.rating ? e.rating.toFixed(1) : '';
   const scoreTip = e.rating && e.votes ? (isEn() ? `${e.votes} ratings` : `${e.votes} 人评分`) : '';
   const rowTip = [e.title, e.genres.slice(0, 3).join(isEn() ? ', ' : '、')].filter(Boolean).join(' · ');
   return `<tr class="episode-row lib-row${st.selected.has(i) ? ' is-selected' : ''}" data-kind="${e.kind}" data-ids='${JSON.stringify(e.ids)}' data-season="${e.season ?? ''}" data-number="${e.number ?? ''}" title="${esc(rowTip)}">
@@ -4102,7 +3852,7 @@ function libRow(it, i, isFav, st) {
       <div class="lib-name" ${locAttrs(e.kind, e.ids)}>${esc(e.title)}</div>
       <div class="lib-sub">${esc(e.sub)}</div>
     </td>
-    <td class="lib-score-cell"><span class="lib-num"${scoreTip ? ` title="${esc(scoreTip)}"` : ''}>${score}</span></td>
+    <td class="lib-score-cell"><span class="lib-num${score ? ' num-star' : ''}"${scoreTip ? ` title="${esc(scoreTip)}"` : ''}>${score ? `${starSvg()}${score}` : '—'}</span></td>
     <td class="lib-date-cell"${full ? ` title="${esc(full)}"` : ''}><span class="lib-num">${esc(date)}</span></td>
     <td class="lib-ops-cell"><div class="lib-ops"><button class="btn btn-sm btn-danger lib-del" data-idx="${i}">${isFav ? '取消收藏' : '移除'}</button></div></td>
   </tr>`;
@@ -4160,8 +3910,8 @@ function renderLibrary() {
       syncLibraryBulk();
     };
   });
-  // 工具条和表头各有一个全选框，两个都绑上（表头那个在 host 内，工具条那个在 host 外）
-  document.querySelectorAll('.lib-all-check').forEach((all) => {
+  // 全选只有表头左上角一个，和详情页剧集管理的表头全选同款（勾上全选、取消全清）
+  host.querySelectorAll('.lib-all-check').forEach((all) => {
     all.onchange = () => {
       rows.forEach(({ i }) => (all.checked ? st.selected.add(i) : st.selected.delete(i)));
       renderLibrary();
@@ -4201,32 +3951,87 @@ async function removeFavorites(indices) {
   const st = state.favorites;
   const items = indices.map((i) => st.data[i]).filter(Boolean);
   if (!items.length) return;
-  if (!(await confirmDialog(`取消收藏 ${items.length} 项？`, '会同步到你的 Trakt 账号；操作后可在提示条里撤销。'))) return;
+  if (!(await confirmDialog(`取消收藏 ${items.length} 项？`, '会同步到你的 Trakt 账号；5 秒内可在提示条里撤销。'))) return;
   const groups = groupRefs(items);
+  const snapshot = st.data.slice();
+  st.selected.clear();
+  ghostMark('favorites', items);
+  st.data = st.data.filter((it) => !items.includes(it));
+  renderLibrary();
   try {
+    let done = 0;
     for (const [seg, arr] of Object.entries(groups)) {
-      await api('/sync/favorites/remove', { method: 'POST', body: { [seg]: arr } });
+      const r = await api('/sync/favorites/remove', { method: 'POST', body: { [seg]: arr } });
+      done += deletedCount(r.data);
     }
-    st.selected.clear();
-    undoToast(`已取消收藏 ${items.length} 项`, async () => {
+    // Trakt 对没匹配上的 id 也回 2xx，删 0 条不能当成功，否则界面上会一直「删不掉」
+    if (!done) throw new Error('Trakt 没删掉这些条目，可能已经不在收藏里了');
+    const title = items.length === 1 ? itemTitle(items[0]) : '';
+    undoToast(title ? `已取消收藏：${title}` : `已取消收藏 ${items.length} 项`, async () => {
+      ghostForget('favorites', items);
       for (const [seg, arr] of Object.entries(groups)) {
         await api('/sync/favorites', { method: 'POST', body: { [seg]: arr } });
       }
       toast('已恢复收藏');
-      if ($('#lib-body')) loadFavorites();
+      setTimeout(() => loadFavorites(), 700);
     });
-    if ($('#lib-body')) loadFavorites();
+    // 删除要几秒才反映到列表接口上，墓碑会挡住这段窗口
+    setTimeout(() => loadFavorites(), 1500);
   } catch (e) {
+    ghostForget('favorites', items);
+    st.data = snapshot;
+    renderLibrary();
     toast(e.message, true);
   }
 }
 
 /* ───────── 片单：加载与批量操作 ───────── */
 
+/** Trakt 的列表接口按加入时间升序返回（早的在前），界面统一反过来：最新加的排最上 */
+function sortByAdded(list, key) {
+  return list.slice().sort((a, b) => (Date.parse(b?.[key] || '') || 0) - (Date.parse(a?.[key] || '') || 0));
+}
+
+/**
+ * Trakt 的删除要过几秒才反映到列表接口上：删完立刻重拉，常常还能读到刚删的那条，
+ * 界面就会「删掉几秒后又自己冒出来」。刚删掉的 id 先记一笔墓碑，重拉时按 id 挡掉，
+ * 到期后自动失效，之后一律以服务器为准。
+ */
+const GHOST_TTL = 120000;
+const libGhost = { watchlist: new Map(), favorites: new Map() };
+const ghostId = (it) => (it?.movie || it?.show || it)?.ids?.trakt || 0;
+function ghostMark(tab, items) {
+  const exp = Date.now() + GHOST_TTL;
+  items.forEach((it) => {
+    const id = ghostId(it);
+    if (id) libGhost[tab].set(id, exp);
+  });
+}
+function ghostForget(tab, items) {
+  items.forEach((it) => libGhost[tab].delete(ghostId(it)));
+}
+function ghostFilter(tab, list) {
+  const map = libGhost[tab];
+  const now = Date.now();
+  for (const [id, exp] of map) if (exp <= now) map.delete(id);
+  return map.size ? list.filter((it) => !map.has(ghostId(it))) : list;
+}
+
+/** Trakt 写响应里的 deleted 才是真正删掉的条数，全 0 说明服务器上根本没匹配上 */
+const deletedCount = (d) => ['movies', 'shows', 'seasons', 'episodes'].reduce((n, k) => n + (Number(d?.deleted?.[k]) || 0), 0);
+
+/** 提示条里的片名：优先用已本地化的译名，取不到退回原名 */
+function itemTitle(it) {
+  const ref = itemRef(it);
+  if (!ref) return '';
+  const local = locCache.get(locKeyFor(ref.art, ref.ids, it.episode?.season, it.episode?.number))?.title;
+  return local || ref.title || '';
+}
+
 async function loadWatchlist() {
   try {
     const r = await api('/sync/watchlist', { query: { extended: 'full' } });
-    state.watchlist.data = (r.data || []).filter(Boolean);
+    state.watchlist.data = sortByAdded(ghostFilter('watchlist', (r.data || []).filter(Boolean)), 'listed_at');
     state.watchlist.selected.clear();
     renderLibrary();
   } catch (e) {
@@ -4237,7 +4042,7 @@ async function loadWatchlist() {
 async function loadFavorites() {
   try {
     const r = await api('/users/me/favorites', { query: { extended: 'full' } });
-    state.favorites.data = (r.data || []).filter(Boolean);
+    state.favorites.data = sortByAdded(ghostFilter('favorites', (r.data || []).filter(Boolean)), 'favorited_at');
     state.favorites.selected.clear();
     renderLibrary();
   } catch (e) {
@@ -4245,356 +4050,51 @@ async function loadFavorites() {
   }
 }
 
+/** 详情页刚移出待看 / 收藏后，把片单缓存与后续重拉里的这条一起摘掉 */
+function dropLibItem(ids, tab) {
+  if (!ids?.trakt || !state[tab]) return;
+  ghostMark(tab, [{ ids }]);
+  state[tab].data = (state[tab].data || []).filter((it) => ((it?.movie || it?.show)?.ids?.trakt || 0) !== ids.trakt);
+  if ($('#lib-body')) renderLibrary();
+}
+
 async function removeWatchlist(indices) {
   const st = state.watchlist;
   const items = indices.map((i) => st.data[i]).filter(Boolean);
   if (!items.length) return;
-  if (!(await confirmDialog(`从 Watchlist 移除 ${items.length} 项？`, '会同步到你的 Trakt 账号；操作后可在提示条里撤销。'))) return;
+  if (!(await confirmDialog(`从 Watchlist 移除 ${items.length} 项？`, '会同步到你的 Trakt 账号；5 秒内可在提示条里撤销。'))) return;
   const groups = groupRefs(items);
+  const snapshot = st.data.slice();
+  st.selected.clear();
+  // 点确认就先把本地这条摘掉：接口来回几百毫秒，界面不该干等；失败再原样放回
+  ghostMark('watchlist', items);
+  st.data = st.data.filter((it) => !items.includes(it));
+  renderLibrary();
   try {
+    let done = 0;
     for (const [seg, arr] of Object.entries(groups)) {
-      await api('/sync/watchlist/remove', { method: 'POST', body: { [seg]: arr } });
+      const r = await api('/sync/watchlist/remove', { method: 'POST', body: { [seg]: arr } });
+      done += deletedCount(r.data);
     }
-    st.selected.clear();
-    undoToast(`已从 Watchlist 移除 ${items.length} 项`, async () => {
+    // Trakt 对没匹配上的 id 也回 2xx，删 0 条不能当成功，否则界面上会一直「删不掉」
+    if (!done) throw new Error('Trakt 没删掉这些条目，可能已经不在待看里了');
+    const title = items.length === 1 ? itemTitle(items[0]) : '';
+    undoToast(title ? `已移出待看：${title}` : `已移出待看 ${items.length} 项`, async () => {
+      ghostForget('watchlist', items);
       for (const [seg, arr] of Object.entries(groups)) {
         await api('/sync/watchlist', { method: 'POST', body: { [seg]: arr } });
       }
-      toast('已恢复');
-      loadWatchlist();
+      toast('已恢复待看');
+      setTimeout(() => loadWatchlist(), 700);
     });
-    loadWatchlist();
+    // 删除要几秒才反映到列表接口上，墓碑会挡住这段窗口
+    setTimeout(() => loadWatchlist(), 1500);
   } catch (e) {
+    ghostForget('watchlist', items);
+    st.data = snapshot;
+    renderLibrary();
     toast(e.message, true);
   }
-}
-
-async function loadLists() {
-  const st = state.lists;
-  try {
-    const r = await api('/users/me/lists');
-    st.data = r.data || [];
-    if (!st.data.length) {
-      $('#lists-body').innerHTML = emptyState('还没有自定义列表，点右上角新建', { icon: 'list' });
-      return;
-    }
-    $('#lists-body').innerHTML = st.data
-      .map(
-        (l) => `<div class="list-row" data-list="${l.ids.trakt}">
-        <div class="list-main">
-          <div class="list-title">${esc(l.name)} ${l.privacy === 'private' ? '<span class="chip">私有</span>' : ''}</div>
-          <div class="list-sub">${esc(l.description || '无描述')} · ${num(l.item_count)} 项</div>
-        </div>
-        <div class="toolbar">
-          <button class="btn btn-sm list-toggle" data-id="${l.ids.trakt}">展开</button>
-          <button class="btn btn-sm list-add" data-id="${l.ids.trakt}" data-name="${esc(l.name)}">加条目</button>
-          <button class="btn btn-sm btn-danger list-del" data-id="${l.ids.trakt}" data-name="${esc(l.name)}">删除</button>
-        </div>
-      </div>
-      <div id="list-items-${l.ids.trakt}" hidden style="border-top:1px solid var(--border)"></div>`
-      )
-      .join('');
-
-    document.querySelectorAll('.list-toggle').forEach((btn) => {
-      btn.onclick = async () => {
-        const id = btn.dataset.id;
-        const box = $(`#list-items-${id}`);
-        if (!box.hidden) {
-          box.hidden = true;
-          state.lists.open.delete(String(id));
-          btn.textContent = '展开';
-          return;
-        }
-        box.hidden = false;
-        state.lists.open.add(String(id));
-        btn.textContent = '收起';
-        await loadListItems(id, box);
-      };
-    });
-
-    // 整页重渲染后把展开状态恢复回来，否则自定义列表会全部收起
-    for (const id of state.lists.open) {
-      const box = $(`#list-items-${id}`);
-      const btn = document.querySelector(`.list-toggle[data-id="${id}"]`);
-      if (!box || !btn) continue;
-      box.hidden = false;
-      btn.textContent = '收起';
-      loadListItems(id, box);
-    }
-
-    document.querySelectorAll('.list-del').forEach((btn) => {
-      btn.onclick = async () => {
-        if (!(await confirmDialog(`删除列表「${btn.dataset.name}」？`, '列表及其条目会一并删除，无法恢复。'))) return;
-        try {
-          await api(`/users/me/lists/${btn.dataset.id}`, { method: 'DELETE' });
-          toast('列表已删除');
-          state.userLists.data = null;
-          loadLists();
-        } catch (e) {
-          toast(e.message, true);
-        }
-      };
-    });
-
-    document.querySelectorAll('.list-add').forEach((btn) => {
-      btn.onclick = () => addItemDialog(btn.dataset.id, btn.dataset.name);
-    });
-  } catch (e) {
-    showError($('#lists-body'), e, loadLists);
-  }
-}
-
-/** 列表条目的选中集合（按列表 id 分开存，切换列表互不影响） */
-function listSel(id) {
-  if (!state.lists.sel) state.lists.sel = {};
-  if (!state.lists.sel[id]) state.lists.sel[id] = new Set();
-  return state.lists.sel[id];
-}
-
-/** 展开某个自定义列表的条目（供「展开」按钮与错误态重试共用） */
-async function loadListItems(id, box) {
-  box.innerHTML = loadingBox();
-  try {
-    const [mv, sh] = await Promise.all([
-      api(`/users/me/lists/${id}/items/movies`),
-      api(`/users/me/lists/${id}/items/shows`),
-    ]);
-    const items = [...(mv.data || []), ...(sh.data || [])].filter(Boolean);
-    if (!items.length) {
-      box.innerHTML = emptyState('列表为空', { icon: 'inbox' });
-      return;
-    }
-
-    const sel = listSel(id);
-    const segOf = (it) => (it.movie ? 'movies' : 'shows');
-    const objOf = (it) => it.movie || it.show || {};
-    const keyOf = (it) => {
-      const o = objOf(it);
-      return `${segOf(it)}:${o.ids?.trakt || o.ids?.slug || ''}`;
-    };
-    const byKey = new Map(items.map((it) => [keyOf(it), it]));
-    const allChecked = items.every((it) => sel.has(keyOf(it)));
-
-    const gridHtml = `<div class="media-grid">${items
-      .map((it) => {
-        const m = objOf(it);
-        const art = it.movie ? 'movie' : 'show';
-        const key = keyOf(it);
-        return mediaCard(
-          art,
-          m.ids,
-          m.title,
-          m.year ? `<span class="media-date">${esc(String(m.year))}</span>` : '',
-          `<div class="media-actions">
-            <label class="media-pick"><input type="checkbox" class="checkbox li-check" data-key="${esc(key)}" aria-label="选择 ${esc(m.title || '该条目')}"${sel.has(key) ? ' checked' : ''}> 选择</label>
-            <button class="btn btn-sm btn-danger li-rm" data-key="${esc(key)}">移除</button>
-          </div>`,
-          '',
-          '',
-          { badge: it.movie ? '电影' : '剧集' }
-        );
-      })
-      .join('')}</div>`;
-
-    box.innerHTML = `
-      <div class="bulk-bar" id="li-bulk-${id}"${sel.size ? '' : ' hidden'}>
-        <span id="li-sel-${id}">已选 ${sel.size} 项</span>
-        <div style="flex:1"></div>
-        <button class="btn btn-sm" data-li-clear="${id}">取消选择</button>
-        <button class="btn btn-sm btn-danger" data-li-del="${id}">移出该列表</button>
-      </div>
-      <div class="hint-bar" style="padding:8px 12px">
-        <label class="media-pick"><input type="checkbox" class="checkbox" id="li-all-${id}"${allChecked ? ' checked' : ''}> 全选</label>
-      </div>
-      ${gridHtml}`;
-
-    bindRowClick(box);
-    localize(box);
-
-    const syncBulk = () => {
-      const bar = $(`#li-bulk-${id}`);
-      if (bar) bar.hidden = sel.size === 0;
-      const n = $(`#li-sel-${id}`);
-      if (n) n.textContent = `已选 ${sel.size} 项`;
-      const all = $(`#li-all-${id}`);
-      if (all) {
-        all.checked = items.every((it) => sel.has(keyOf(it)));
-        all.indeterminate = sel.size > 0 && !all.checked;
-      }
-    };
-
-    box.querySelectorAll('.li-check').forEach((cb) => {
-      cb.onchange = () => {
-        const key = cb.dataset.key;
-        if (cb.checked) sel.add(key);
-        else sel.delete(key);
-        syncBulk();
-      };
-    });
-
-    const allBox = $(`#li-all-${id}`);
-    if (allBox) {
-      allBox.onchange = () => {
-        if (allBox.checked) items.forEach((it) => sel.add(keyOf(it)));
-        else sel.clear();
-        loadListItems(id, box);
-      };
-    }
-
-    box.querySelectorAll('[data-li-clear]').forEach((b) => {
-      b.onclick = () => {
-        sel.clear();
-        loadListItems(id, box);
-      };
-    });
-
-    box.querySelectorAll('[data-li-del]').forEach((b) => {
-      b.onclick = () => removeListItems(id, [...sel]);
-    });
-
-    box.querySelectorAll('.li-rm').forEach((b) => {
-      b.onclick = async () => {
-        const it = byKey.get(b.dataset.key);
-        if (!it) return;
-        const m = objOf(it);
-        if (!(await confirmRemove(m.title || '该条目', '该列表'))) return;
-        try {
-          const seg = segOf(it);
-          const ids = m.ids;
-          await api(`/users/me/lists/${id}/items/remove`, { method: 'POST', body: { [seg]: [{ ids }] } });
-          sel.delete(keyOf(it));
-          undoToast('已从列表移除', async () => {
-            await api(`/users/me/lists/${id}/items`, { method: 'POST', body: { [seg]: [{ ids }] } });
-            toast('已恢复');
-            await loadListItems(id, $(`#list-items-${id}`));
-          });
-          await loadListItems(id, box);
-        } catch (e) {
-          toast(e.message, true);
-        }
-      };
-    });
-
-    syncBulk();
-  } catch (e) {
-    showError(box, e, () => loadListItems(id, box));
-  }
-}
-
-/** 批量从自定义列表移除：一次请求带上全部条目（Trakt 支持数组），失败即整体报错 */
-async function removeListItems(id, keys) {
-  if (!keys.length) return;
-  if (!(await confirmDialog(`从列表移除 ${keys.length} 项？`, '会同步到你的 Trakt 账号；操作后可在提示条里撤销。'))) return;
-  const groups = { movies: [], shows: [] };
-  for (const key of keys) {
-    const [seg, ref] = key.split(':');
-    if (!groups[seg] || !ref) continue;
-    groups[seg].push({ ids: /^\d+$/.test(ref) ? { trakt: Number(ref) } : { slug: ref } });
-  }
-  const total = groups.movies.length + groups.shows.length;
-  if (!total) return;
-  try {
-    await api(`/users/me/lists/${id}/items/remove`, { method: 'POST', body: groups });
-    listSel(id).clear();
-    undoToast(`已移除 ${total} 项`, async () => {
-      await api(`/users/me/lists/${id}/items`, { method: 'POST', body: groups });
-      toast('已恢复');
-      await loadListItems(id, $(`#list-items-${id}`));
-    });
-    await loadListItems(id, $(`#list-items-${id}`));
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-function createListDialog() {
-  openModal(`
-    <h3>新建列表</h3>
-    <div class="field"><label>名称</label><input id="nl-name" type="text" placeholder="例如：2026 待看" /></div>
-    <div class="field"><label>描述（可选）</label><input id="nl-desc" type="text" placeholder="一句话说明" /></div>
-    <div class="field"><label>隐私</label>
-      <select id="nl-privacy">
-        <option value="private">私有</option>
-        <option value="public">公开</option>
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" data-close>取消</button>
-      <button class="btn btn-primary" id="nl-ok">创建</button>
-    </div>`);
-
-  $('#nl-ok').onclick = async () => {
-    const name = $('#nl-name').value.trim();
-    if (!name) return toast('请输入名称', true);
-    try {
-      await api('/users/me/lists', {
-        method: 'POST',
-        body: { name, description: $('#nl-desc').value.trim(), privacy: $('#nl-privacy').value, display_numbers: true, allow_comments: false },
-      });
-      closeModal();
-      toast('列表已创建');
-      loadLists();
-    } catch (e) {
-      toast(e.message, true);
-    }
-  };
-}
-
-function addItemDialog(listId, listName) {
-  openModal(`
-    <h3>向「${esc(listName)}」添加</h3>
-    <div class="field"><label>搜索电影或剧集</label>
-      <div class="toolbar"><input id="ai-q" type="text" placeholder="输入标题后回车" style="flex:1" />
-      <button class="btn btn-sm" id="ai-go">搜索</button></div>
-    </div>
-    <div id="ai-results" style="max-height:260px;overflow:auto"></div>
-    <div class="modal-actions"><button class="btn" data-close>关闭</button></div>`);
-
-  const search = async () => {
-    const q = $('#ai-q').value.trim();
-    if (!q) return;
-    const box = $('#ai-results');
-    box.innerHTML = loadingBox();
-    try {
-      const r = await api('/search/movie,show', { query: { query: q, limit: 12 } });
-      const rows = (r.data || []).filter(Boolean);
-      if (!rows.length) {
-        box.innerHTML = emptyState('没有匹配结果', { icon: 'search' });
-        return;
-      }
-      box.innerHTML = rows
-        .map((it, i) => {
-          const m = it.movie || it.show || {};
-          return `<div class="list-row" style="padding:9px 4px">
-            <div class="list-main"><div class="list-title" ${locAttrs(it.type, m.ids)}>${esc(m.title)}</div>
-            <div class="list-sub">${esc(m.year || '')} · ${it.type === 'movie' ? '电影' : '剧集'}</div></div>
-            <button class="btn btn-sm ai-add" data-i="${i}">加入</button>
-          </div>`;
-        })
-        .join('');
-      localize(box);
-      document.querySelectorAll('.ai-add').forEach((b) => {
-        b.onclick = async () => {
-          const it = rows[Number(b.dataset.i)];
-          const key = it.type === 'movie' ? 'movies' : 'shows';
-          const ids = (it.movie || it.show).ids;
-          try {
-            await api(`/users/me/lists/${listId}/items`, { method: 'POST', body: { [key]: [{ ids }] } });
-            toast('已加入列表');
-            b.textContent = '已加入';
-            b.disabled = true;
-          } catch (e) {
-            toast(e.message, true);
-          }
-        };
-      });
-    } catch (e) {
-      showError(box, e, search);
-    }
-  };
-  $('#ai-go').onclick = search;
-  $('#ai-q').onkeydown = (e) => e.key === 'Enter' && search();
-  $('#ai-q').focus();
 }
 
 /* ───────── 设置 ───────── */
@@ -4609,6 +4109,8 @@ const davRow = (label, id, init = '—') =>
 
 PAGES.settings = async () => {
   const bg = bgPref();
+  // 遮罩这一项带前缀（「遮罩：柔和」），和来源并排时一眼知道这行在选什么
+  const dimPrefix = isEn() ? 'Dim: ' : '遮罩：';
   const mode = themeMode();
   $('#view').innerHTML =
     head('设置', '外观、媒体来源与数据备份', '') +
@@ -4634,44 +4136,28 @@ PAGES.settings = async () => {
       <div class="settings-row">
         <div>
           <div class="settings-name">语言</div>
-          <div class="settings-hint">界面与影视信息共用一套，切换后整页刷新</div>
+          <div class="settings-hint">${isEn() ? 'Titles and summaries' : '全局界面语言'}</div>
         </div>
         <div class="settings-ctl">
           <div class="seg" id="lang-seg"></div>
         </div>
       </div>
-      <div id="lang-status" class="settings-status"></div>
       <div class="settings-row">
         <div>
           <div class="settings-name">沉浸背景</div>
-          <div class="settings-hint">影视封面轮播与暗度</div>
+          <div id="bg-status" class="settings-hint"></div>
         </div>
         <div class="settings-ctl">
-          <select id="bg-source">
-            ${Object.keys(BG_SOURCES)
-              .map((k) => `<option value="${k}"${bg.source === k ? ' selected' : ''}>${bgLabel(k)}</option>`)
-              .join('')}
-          </select>
-          <select id="bg-dim">
-            ${Object.keys(BG_DIMS)
-              .map(
-                (k) =>
-                  `<option value="${k}"${bg.dim === k ? ' selected' : ''}>${isEn() ? 'Dim: ' : '遮罩：'}${bgDimLabel(k)}</option>`
-              )
-              .join('')}
-          </select>
+          <button type="button" class="pick-field" id="bg-source" data-value="${esc(bg.source)}" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt">${esc(bgLabel(bg.source))}</span><i class="pick-caret"></i></button>
+          <button type="button" class="pick-field" id="bg-dim" data-value="${esc(bg.dim)}" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt">${esc(dimPrefix + bgDimLabel(bg.dim))}</span><i class="pick-caret"></i></button>
         </div>
       </div>
-      <div id="bg-status" class="settings-status"></div>
     </section>
 
     <section class="card settings-card">
-      ${settingsHead(ICON.key, '媒体数据源', '影视标题、简介与高清剧照')}
+      ${settingsHead(ICON.key, '媒体数据源', isEn() ? 'TMDB titles, overviews and stills — the key stays on the server' : 'TMDB 提供标题、简介与剧照，key 只存服务端')}
       <div class="settings-row" style="display:block">
-        <div class="settings-hint" style="max-width:none">
-          Key 仅保存在服务端。可在 themoviedb.org 免费申请。
-        </div>
-        <div class="toolbar" style="margin-top:12px">
+        <div class="toolbar">
           <input id="tmdb-key" type="text" placeholder="粘贴 v3 key（32 位）或 v4 Read Access Token" style="flex:1;min-width:260px" />
           <button class="btn btn-primary" id="tmdb-save">保存并校验</button>
           <button class="btn" id="tmdb-clear">清除</button>
@@ -4681,12 +4167,7 @@ PAGES.settings = async () => {
     </section>
 
     <section class="card settings-card">
-      ${settingsHead(ICON.database, '数据备份与恢复', '版本化 JSON，只含你的观影数据，不含任何凭据')}
-      <div class="settings-hint" style="max-width:none">
-        ${isEn()
-          ? 'Backups include <b>watch history, ratings, watchlist, favorites, custom lists (with items) and display language</b>. If pagination is incomplete, the preview says so. Restoring <b>writes to your Trakt account</b>: existing items are skipped, rating conflicts overwritten, failures reported separately.'
-          : '备份包含<b>观看历史、评分、待看清单、收藏、自定义列表（含条目）和显示语言</b>；分页拉不全时会在预览里如实提示。恢复会<b>写入你的 Trakt 账号</b>：已存在的跳过、评分冲突覆盖、失败部分单独报告。'}
-      </div>
+      ${settingsHead(ICON.database, '数据备份与恢复', isEn() ? 'Watch data only, no credentials — restore writes to your Trakt account' : '只含观影数据、不含凭据；恢复会写入 Trakt 账号')}
       <div class="settings-foot">
         <button class="btn" id="backup-preview">查看备份范围</button>
         <button class="btn btn-primary" id="backup-download">下载完整备份</button>
@@ -4697,12 +4178,7 @@ PAGES.settings = async () => {
     </section>
 
     <section class="card settings-card dav-card">
-      ${settingsHead(ICON.cloud, 'WebDAV 云备份', '填一个网盘 / NAS 目录（坚果云、Nextcloud、群晖），按计划自动上传并只保留最近 N 份')}
-      <div class="settings-hint dav-card-hint">
-        ${isEn()
-          ? 'The password stays on the server: never in backups, never sent to the browser. Schedules use <b>your browser timezone</b>.'
-          : '密码只保存在服务端，不会出现在备份文件里，也不会下发到浏览器；排程按<b>你的浏览器时区</b>折算。'}
-      </div>
+      ${settingsHead(ICON.cloud, 'WebDAV 云备份', isEn() ? 'Nutstore / Nextcloud / Synology — the password stays on the server' : '坚果云 / Nextcloud / 群晖；密码只存服务端')}
       <div class="dav-toggle-row">
         <div>
           <div class="dav-toggle-label">启用自动备份</div>
@@ -4721,38 +4197,33 @@ PAGES.settings = async () => {
               <input class="dav-input" id="dav-url" type="text" placeholder="https://example.com" autocomplete="off" spellcheck="false" />
             </div>
             <div class="dav-field"><label>备份路径</label>
-              <input class="dav-input" id="dav-path" type="text" placeholder="/Trakt" autocomplete="off" spellcheck="false" />
-              <div class="dav-field-hint">留空则存到根目录，首次备份会自动创建子目录</div>
+              <input class="dav-input" id="dav-path" type="text" placeholder="/Trakt（留空存根目录）" autocomplete="off" spellcheck="false" />
             </div>
-            <div class="dav-field"><label>用户名</label><input class="dav-input" id="dav-user" type="text" autocomplete="off" /></div>
-            <div class="dav-field"><label>密码 / 应用专用密码</label><input class="dav-input" id="dav-pass" type="password" autocomplete="new-password" placeholder="已保存则留空" /></div>
+            <div class="dav-field"><label>用户名</label>
+              <input class="dav-input" id="dav-user" type="text" autocomplete="off" />
+            </div>
+            <div class="dav-field"><label>密码 / 应用专用密码</label>
+              <input class="dav-input" id="dav-pass" type="password" autocomplete="new-password" placeholder="已保存则留空" />
+            </div>
           </div>
 
           <div class="dav-block-title">备份计划</div>
           <div class="dav-form">
-            <div class="dav-field"><label>备份周期</label>
-              <select class="dav-input" id="dav-freq">
-                <option value="daily">每天</option>
-                <option value="weekly">每周</option>
-                <option value="monthly">每月</option>
-              </select>
+            <div class="dav-field"><label for="dav-freq">备份周期</label>
+              <button type="button" class="dav-input pick-field" id="dav-freq" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span><i class="pick-caret"></i></button>
             </div>
-            <div class="dav-field"><label>执行时间（本地时区）</label>
-              <input class="dav-input" id="dav-time" type="time" step="60" autocomplete="off" />
+            <div class="dav-field"><label for="dav-time">执行时间（本地时区）</label>
+              <button type="button" class="dav-input pick-field" id="dav-time" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span>${ICON.clock}</button>
             </div>
-            <div class="dav-field" id="dav-week-wrap" style="display:none"><label>星期</label>
-              <select class="dav-input" id="dav-week">
-                <option value="1">周一</option><option value="2">周二</option><option value="3">周三</option>
-                <option value="4">周四</option><option value="5">周五</option><option value="6">周六</option>
-                <option value="0">周日</option>
-              </select>
+            <div class="dav-field" id="dav-week-wrap" style="display:none"><label for="dav-week">星期</label>
+              <button type="button" class="dav-input pick-field" id="dav-week" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span><i class="pick-caret"></i></button>
             </div>
-            <div class="dav-field" id="dav-day-wrap" style="display:none"><label>每月几号</label>
-              <select class="dav-input" id="dav-day">
-                ${Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}">${i + 1} 号</option>`).join('')}
-              </select>
+            <div class="dav-field" id="dav-day-wrap" style="display:none"><label for="dav-day">每月几号</label>
+              <button type="button" class="dav-input pick-field" id="dav-day" aria-haspopup="dialog" aria-expanded="false"><span class="pick-field-txt"></span><i class="pick-caret"></i></button>
             </div>
-            <div class="dav-field"><label>保留份数</label><input class="dav-input" id="dav-keep" type="number" min="1" max="100" value="10" /></div>
+            <div class="dav-field"><label>保留份数</label>
+              <input class="dav-input" id="dav-keep" type="number" min="1" max="100" value="10" />
+            </div>
           </div>
           <div class="dav-actions">
             <button class="btn" id="dav-test">测试连接</button>
@@ -4785,10 +4256,20 @@ PAGES.settings = async () => {
     <div id="dav-files"></div>
 
     <section class="card settings-card">
-      ${settingsHead(ICON.info, '运行状态', '当前生效的数据源与缓存策略')}
-      <div id="provider-info" class="settings-hint" style="max-width:none;font-size:var(--fs-sm);line-height:1.9">…</div>
+      ${settingsHead(ICON.info, '运行状态', '版本号与当前生效的数据源')}
+      <div id="provider-info" class="settings-hint" style="max-width:none;font-size:var(--fs-sm);line-height:var(--lh-loose)">…</div>
     </section>
     </div>`;
+
+  // 后端版本来自 /api/settings（旧进程没有这个字段），前端版本是构建号：
+  // 两个并排显示，版本对不上时一眼看出是服务端没重启还是浏览器拿了缓存。
+  const paintProvider = (s = {}) => {
+    const be = s.version ? `v${esc(s.version)}` : isEn() ? 'server not restarted' : '服务端未重启';
+    const fe = esc(window.__TM_VERSION__ || '—');
+    $('#provider-info').innerHTML = isEn()
+      ? `Version <b>${be}</b> · build <b>${fe}</b> · source <b>${s.provider === 'tmdb' ? 'TMDB' : 'Trakt'}</b>`
+      : `版本 <b>${be}</b> · 前端 <b>${fe}</b> · 数据源 <b>${s.provider === 'tmdb' ? 'TMDB' : 'Trakt'}</b>`;
+  };
 
   const paint = (s) => {
     const t = s.tmdb || {};
@@ -4797,31 +4278,27 @@ PAGES.settings = async () => {
         ? `Configured: <b>${esc(t.preview || '')}</b> (${t.source === 'env' ? 'environment variable' : 'saved'})`
         : `已配置：<b>${esc(t.preview || '')}</b>（${t.source === 'env' ? '环境变量' : '已保存'}）`
       : isEn()
-        ? 'Not configured: falling back to <b>Trakt</b> data, so some metadata may be incomplete.'
-        : '未配置：使用 <b>Trakt</b> 数据，中文信息可能不完整。';
+        ? 'Not configured — falling back to <b>Trakt</b>'
+        : '未配置 — 暂用 <b>Trakt</b> 数据';
 
     // 语言只有一个来源：服务端的 cfg:tmdb_lang。界面与影视信息共用这一套，
     // 菜单里的中文/English 也就是 TMDB 的 zh-CN/en-US，切一次两边同时变。
     const current = s.lang || getLang();
     const opts = LANGS.slice();
     if (!opts.some(([code]) => code === current)) opts.push([current, current]);
+    // 语言按钮本身就是当前状态，不再另起一行文字说明；
+    // 服务端 TMDB_LANG 锁定时只在 title 里交代原因（悬停可见，不占版面）。
     const locked = s.langSource === 'env';
+    const lockedNote = isEn() ? 'Fixed by the server (TMDB_LANG)' : '由服务端 TMDB_LANG 固定';
     $('#lang-seg').innerHTML = opts
       .map(
         ([code, label]) =>
-          `<button type="button" data-lang-opt="${esc(code)}" class="${code === current ? 'active' : ''}"${locked ? ' disabled' : ''}>${esc(label)}</button>`
+          `<button type="button" data-lang-opt="${esc(code)}" class="${code === current ? 'active' : ''}"${
+            locked ? ` disabled title="${lockedNote}"` : ''
+          }>${esc(label)}</button>`
       )
       .join('');
-    $('#lang-status').textContent = locked
-      ? isEn()
-        ? `Fixed by the server (TMDB_LANG): ${current}`
-        : `由服务端 TMDB_LANG 固定：${current}`
-      : isEn()
-        ? `Current: ${current}`
-        : `当前：${current}`;
-    $('#provider-info').innerHTML = isEn()
-      ? `<div>Source: <b>${s.provider === 'tmdb' ? 'TMDB' : 'Trakt'}</b> · same-origin image proxy · 30-day cache</div>`
-      : `<div>数据源：<b>${s.provider === 'tmdb' ? 'TMDB' : 'Trakt'}</b> · 同源图片代理 · 缓存 30 天</div>`;
+    paintProvider(s);
   };
 
   const load = async () => {
@@ -4831,6 +4308,7 @@ PAGES.settings = async () => {
       paint(j);
     } catch (e) {
       $('#tmdb-status').textContent = '读取设置失败：' + e.message;
+      paintProvider();
     }
   };
   await load();
@@ -4872,36 +4350,50 @@ PAGES.settings = async () => {
     };
   });
 
-  const bgNow = bgPref();
+  // 来源与遮罩已经写在按钮上了，这一行只说「现在有没有在轮播」
   $('#bg-status').textContent =
-    bgNow.source === 'off'
-      ? isEn()
-        ? 'Off — the page uses a solid background.'
-        : '当前已关闭，页面使用纯色背景。'
-      : isEn()
-        ? `Source “${bgLabel(bgNow.source)}” · dim “${bgDimLabel(bgNow.dim)}”, artwork rotates every 45s.`
-        : `当前来源「${BG_SOURCES[bgNow.source]}」· 遮罩「${BG_DIMS[bgNow.dim]}」，每 45 秒自动切换封面。`;
+    bgPref().source === 'off' ? (isEn() ? 'Off — solid background' : '已关闭，使用纯色背景') : isEn() ? 'Artwork rotates every 45s' : '封面每 45 秒轮播';
 
-  $('#bg-source').onchange = async (e) => {
-    const next = bgSavePref({ source: e.target.value });
-    const st = $('#bg-status');
-    if (next.source === 'off') {
-      st.textContent = isEn() ? 'Off — the page uses a solid background.' : '已关闭，页面使用纯色背景。';
-      return;
-    }
-    st.textContent = isEn() ? 'Fetching artwork…' : '正在取图…';
-    const items = await bgFetch(next.source).catch(() => []);
-    st.textContent = items.length
-      ? isEn()
-        ? `Enabled “${bgLabel(next.source)}”: rotating ${items.length} artworks every 45s.`
-        : `已启用「${BG_SOURCES[next.source]}」：${items.length} 张封面轮播，每 45 秒切换。`
-      : isEn()
-        ? 'No artwork available for this source — try another one.'
-        : '暂时取不到封面：该来源下没有可用条目，换个来源试试。';
-  };
-  $('#bg-dim').onchange = (e) => {
-    bgSavePref({ dim: e.target.value });
-  };
+  $('#bg-source').onclick = () =>
+    mountChoicePicker($('#bg-source'), {
+      value: $('#bg-source').dataset.value,
+      cols: 1,
+      width: 200,
+      align: 'left',
+      label: '沉浸背景',
+      options: Object.keys(BG_SOURCES).map((k) => ({ value: k, label: bgLabel(k) })),
+      onPick: async (val) => {
+        const next = bgSavePref({ source: val });
+        setPickField($('#bg-source'), bgLabel(next.source), next.source);
+        const st = $('#bg-status');
+        if (next.source === 'off') {
+          st.textContent = isEn() ? 'Off — solid background' : '已关闭，使用纯色背景';
+          return;
+        }
+        st.textContent = isEn() ? 'Fetching artwork…' : '正在获取封面…';
+        const items = await bgFetch(next.source).catch(() => []);
+        st.textContent = items.length
+          ? isEn()
+            ? `${items.length} artworks · every 45s`
+            : `${items.length} 张封面 · 每 45 秒轮播`
+          : isEn()
+            ? 'No artwork for this source — try another'
+            : '该来源暂无封面，换个来源试试';
+      },
+    });
+  $('#bg-dim').onclick = () =>
+    mountChoicePicker($('#bg-dim'), {
+      value: $('#bg-dim').dataset.value,
+      cols: 1,
+      width: 200,
+      align: 'left',
+      label: '遮罩强度',
+      options: Object.keys(BG_DIMS).map((k) => ({ value: k, label: dimPrefix + bgDimLabel(k) })),
+      onPick: (val) => {
+        bgSavePref({ dim: val });
+        setPickField($('#bg-dim'), dimPrefix + bgDimLabel(val), val);
+      },
+    });
 
   $('#lang-seg').onclick = async (e) => {
     const btn = e.target.closest('[data-lang-opt]');
@@ -4988,7 +4480,7 @@ PAGES.settings = async () => {
       a.download = `trakt-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
-      $('#backup-status').textContent = `备份已生成并开始下载（${fmtDateTime(new Date().toISOString())}）。`;
+      $('#backup-status').textContent = '备份已生成，开始下载';
     } catch (e) {
       $('#backup-status').innerHTML = `<span style="color:#ff6b70">${esc(e.message)}</span>`;
     } finally {
@@ -5005,12 +4497,14 @@ PAGES.settings = async () => {
     btn.textContent = '统计中…';
     try {
       const meta = await apiJson('/api/backup?preview=1');
-      openModal(`<h3>备份范围预览</h3>
-        <p class="note">账号「${esc(meta.user?.username || '')}」 · 备份不含任何令牌 / key / 密码。</p>
+      openModal({
+        title: '备份范围预览',
+        size: 'md',
+        body: `<p class="note">账号「${esc(meta.user?.username || '')}」 · 备份不含任何令牌 / key / 密码。</p>
         ${backupCounts(meta.counts)}
         ${
           Object.values(meta.truncated || {}).some(Boolean)
-            ? `<p class="note" style="color:#ffb454">注意：部分数据超过单次拉取上限，备份会被标记为不完整：<b>${esc(
+            ? `<p class="note" style="color:var(--warn)">注意：部分数据超过单次拉取上限，备份会被标记为不完整：<b>${esc(
                 Object.entries(meta.truncated)
                   .filter(([, v]) => v)
                   .map(([k]) => k)
@@ -5018,9 +4512,10 @@ PAGES.settings = async () => {
               )}</b>。建议分批处理或稍后重试。</p>`
             : '<p class="note">所有分页数据均完整拉取。</p>'
         }
-        ${(meta.warnings || []).map((w) => `<p class="note" style="color:#ffb454">${esc(w)}</p>`).join('')}
-        <div class="modal-actions"><button class="btn" data-close>关闭</button>
-        <button class="btn btn-primary" id="bprev-dl">下载完整备份</button></div>`);
+        ${(meta.warnings || []).map((w) => `<p class="note" style="color:var(--warn)">${esc(w)}</p>`).join('')}`,
+        actions: `<button class="btn" data-close>关闭</button>
+        <button class="btn btn-primary" id="bprev-dl">下载完整备份</button>`,
+      });
       $('#bprev-dl').onclick = (ev) => downloadBackup(ev.currentTarget);
     } catch (err) {
       $('#backup-status').innerHTML = `<span style="color:#ff6b70">${esc(err.message)}</span>`;
@@ -5052,9 +4547,9 @@ PAGES.settings = async () => {
       s.invalidItems ? `无效条目 ${num(s.invalidItems)}` : '',
     ].filter(Boolean);
     return `<tr>
-      <td style="padding:8px 10px"><input class="checkbox rs" type="checkbox" data-s="${key}" checked /></td>
-      <td style="padding:8px 10px">${SCOPE_LABELS[key]}</td>
-      <td style="padding:8px 10px">${bits.length ? bits.join(' · ') : '无变化'}</td>
+      <td><input class="checkbox rs" type="checkbox" data-s="${key}" checked /></td>
+      <td>${SCOPE_LABELS[key]}</td>
+      <td>${bits.length ? bits.join(' · ') : '无变化'}</td>
     </tr>`;
   };
 
@@ -5074,14 +4569,17 @@ PAGES.settings = async () => {
           x.invalid ? `无效 ${num(x.invalid)}` : '',
           x.failed ? `失败 ${num(x.failed)}` : '',
         ].filter(Boolean);
-        return `<tr><td style="padding:8px 10px">${SCOPE_LABELS[k]}</td><td style="padding:8px 10px">${bits.join(' · ') || '无变化'}</td></tr>`;
+        return `<tr><td>${SCOPE_LABELS[k]}</td><td>${bits.join(' · ') || '无变化'}</td></tr>`;
       })
       .join('');
     const errs = (res.report.errors || []).slice(0, 10);
-    openModal(`<h3>${res.ok ? '恢复完成' : '恢复完成（有失败项）'}</h3>
-      <table style="margin:12px 0"><tbody>${rows}</tbody></table>
-      ${res.partial ? `<p class="note" style="color:#ffb454">部分条目写入失败，Trakt 不支持回滚；上面如实列出失败项，未受影响的范围已完成。${errs.length ? '<br/>' + errs.map(esc).join('<br/>') : ''}</p>` : '<p class="note">已按上游响应核对写入计数，全部成功。</p>'}
-      <div class="modal-actions"><button class="btn btn-primary" data-close>完成</button></div>`);
+    openModal({
+      title: res.ok ? '恢复完成' : '恢复完成（有失败项）',
+      size: 'md',
+      body: `<table><tbody>${rows}</tbody></table>
+      ${res.partial ? `<p class="note" style="color:var(--warn)">部分条目写入失败，Trakt 不支持回滚；上面如实列出失败项，未受影响的范围已完成。${errs.length ? '<br/>' + errs.map(esc).join('<br/>') : ''}</p>` : '<p class="note">已按上游响应核对写入计数，全部成功。</p>'}`,
+      actions: `<button class="btn btn-primary" data-close>完成</button>`,
+    });
     state.dirty = true;
     toast(res.ok ? '恢复已完成' : '恢复完成，但有部分失败项', res.ok ? {} : true);
   };
@@ -5093,17 +4591,20 @@ PAGES.settings = async () => {
       toast('备份里没有可恢复的范围');
       return;
     }
-    const warnHtml = res.warnings.map((w) => `<p class="note" style="color:#ffb454">${esc(w)}</p>`).join('');
-    openModal(`<h3>恢复预览</h3>
-      <p class="note">来源：${esc(sourceLabel)} · 备份时间 ${esc(fmtDateTime(res.backup.createdAt))} · 账号「${esc(res.backup.user?.username || '')}」。<br/>
+    const warnHtml = res.warnings.map((w) => `<p class="note" style="color:var(--warn)">${esc(w)}</p>`).join('');
+    openModal({
+      title: '恢复预览',
+      size: 'lg',
+      body: `<p class="note">来源：${esc(sourceLabel)} · 备份时间 ${esc(fmtDateTime(res.backup.createdAt))} · 账号「${esc(res.backup.user?.username || '')}」。<br/>
         只写入勾选范围；已存在的跳过，评分不同会覆盖为备份里的分数。Trakt 不支持回滚，请确认后再执行。</p>
       ${warnHtml}
-      <table style="margin:12px 0"><tbody>
+      <table><tbody>
         ${keys.map((k) => previewRow(k, res.preview.sections[k])).join('')}
       </tbody></table>
-      <p class="note">合计：新增 ${num(res.preview.totals.new)} · 跳过 ${num(res.preview.totals.skip)} · 冲突覆盖 ${num(res.preview.totals.conflict)} · 无效 ${num(res.preview.totals.invalid)}</p>
-      <div class="modal-actions"><button class="btn" data-close>取消</button>
-      <button class="btn btn-danger" id="rs-go">确认恢复</button></div>`);
+      <p class="note">合计：新增 ${num(res.preview.totals.new)} · 跳过 ${num(res.preview.totals.skip)} · 冲突覆盖 ${num(res.preview.totals.conflict)} · 无效 ${num(res.preview.totals.invalid)}</p>`,
+      actions: `<button class="btn" data-close>取消</button>
+      <button class="btn btn-danger" id="rs-go">确认恢复</button>`,
+    });
 
     $('#rs-go').onclick = async (ev) => {
       const picked = [...document.querySelectorAll('.rs')].filter((c) => c.checked).map((c) => c.dataset.s);
@@ -5180,20 +4681,40 @@ PAGES.settings = async () => {
     return mo < 12 ? `${mo} 个月前` : `${Math.floor(mo / 12)} 年前`;
   };
 
+  const WEEK_NAMES_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const WEEK_NAMES_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weekNameOf = (v) => (isEn() ? WEEK_NAMES_EN : WEEK_NAMES_CN)[Number(v) || 0];
+  // 日期 / 时间 / 星期 / 几号 / 周期 都由按钮承载值（setPickField 在模块级），外观仍是输入框
   const paintDavHint = () => {
     const en = isEn();
-    const freq = DAV_FREQ_LABEL[$('#dav-freq').value] || (en ? 'Daily' : '每天');
-    const { hour, minute } = parseDavTime($('#dav-time').value);
+    const freqKey = $('#dav-freq').dataset.value;
+    const freq = DAV_FREQ_LABEL[freqKey] || (en ? 'Daily' : '每天');
+    const { hour, minute } = parseDavTime($('#dav-time').dataset.value);
     const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
     const keep = Math.max(1, Math.min(100, Number($('#dav-keep').value || 10)));
+    const dom = Number($('#dav-day').dataset.value) || 1;
+    const wd = Number($('#dav-week').dataset.value) || 0;
+    // 计划要把「哪天」说全：只写「每月 16:00」看不出是几号
+    const when =
+      freqKey === 'weekly'
+        ? en
+          ? `${freq} on ${weekNameOf(wd)} at ${time}`
+          : `每${WEEK_NAMES_CN[wd].replace('周', '')} ${time}`
+        : freqKey === 'monthly'
+          ? en
+            ? `${freq} on day ${dom} at ${time}`
+            : `每月 ${dom} 号 ${time}`
+          : en
+            ? `${freq} at ${time}`
+            : `${freq} ${time}`;
     $('#dav-enabled-hint').textContent = $('#dav-enabled').checked
       ? en
-        ? `Enabled · runs ${freq.toLowerCase()} at ${time}`
-        : `已启用 · ${freq} ${time} 自动执行备份`
+        ? `Enabled · ${when.replace(/^\w+/, (w) => w.toLowerCase())}`
+        : `已启用 · ${when}`
       : en
-        ? 'Disabled · you can still back up manually'
-        : '未启用 · 保存后可手动备份';
-    $('#dav-plan').textContent = en ? `${freq} at ${time} · keep ${keep}` : `${freq} ${time} · 保留 ${keep} 份`;
+        ? 'Disabled · manual backup still works'
+        : '未启用 · 可手动备份';
+    $('#dav-plan').textContent = en ? `${when} · keep ${keep}` : `${when} · 保留 ${keep} 份`;
   };
 
   const paintDav = (c = {}) => {
@@ -5202,11 +4723,12 @@ PAGES.settings = async () => {
     $('#dav-path').value = davUrl.path;
     $('#dav-user').value = c.username || '';
     $('#dav-pass').value = '';
-    $('#dav-freq').value = c.frequency || 'daily';
+    setPickField($('#dav-freq'), DAV_FREQ_LABEL[c.frequency || 'daily'], c.frequency || 'daily');
     // 从未配置过时，默认就是「此刻」（用户添加这项设置的时刻），不是服务端的 03:00 兜底值
-    $('#dav-time').value = c.configured === false ? nowHm() : davTimeOf(c);
-    $('#dav-week').value = String(c.weekday ?? 1);
-    $('#dav-day').value = String(c.day ?? 1);
+    const hm = c.configured === false ? nowHm() : davTimeOf(c);
+    setPickField($('#dav-time'), hm, hm);
+    setPickField($('#dav-week'), weekNameOf(c.weekday ?? 1), c.weekday ?? 1);
+    setPickField($('#dav-day'), isEn() ? String(c.day ?? 1) : `${c.day ?? 1} 号`, c.day ?? 1);
     $('#dav-keep').value = c.keep ?? 10;
     $('#dav-enabled').checked = Boolean(c.enabled);
     $('#dav-week-wrap').style.display = (c.frequency || 'daily') === 'weekly' ? '' : 'none';
@@ -5237,13 +4759,14 @@ PAGES.settings = async () => {
         $('#dav-last-file').textContent = '—';
         $('#dav-counts').textContent = '—';
       } else if (res.ok) {
-        $('#dav-last-result').innerHTML = '<span class="dav-ok">成功</span><span class="note" style="display:block;font-size:11px">已备份到 WebDAV</span>';
+        $('#dav-last-result').innerHTML = '<span class="dav-ok">成功</span>';
         $('#dav-last-file').textContent = res.name || '—';
         $('#dav-counts').textContent = res.counts
           ? `历史 ${num(res.counts.history)} · 评分 ${num(res.counts.ratings)} · 列表 ${num(res.counts.lists)}`
           : '—';
       } else {
-        $('#dav-last-result').innerHTML = `<span class="dav-bad">失败</span><span class="note" style="display:block;font-size:11px">${esc(res.message || '未知错误')}</span>`;
+        // 失败原因挂在 title 上：右栏一行说得下，想细看悬停即可
+        $('#dav-last-result').innerHTML = `<span class="dav-bad" title="${esc(res.message || '未知错误')}">失败</span>`;
         $('#dav-last-file').textContent = '—';
         $('#dav-counts').textContent = '—';
       }
@@ -5288,10 +4811,10 @@ PAGES.settings = async () => {
     username: $('#dav-user').value.trim(),
     ...($('#dav-pass').value ? { password: $('#dav-pass').value } : {}),
     enabled: $('#dav-enabled').checked,
-    frequency: $('#dav-freq').value,
-    ...parseDavTime($('#dav-time').value),
-    weekday: Number($('#dav-week').value || 1),
-    day: Number($('#dav-day').value || 1),
+    frequency: $('#dav-freq').dataset.value,
+    ...parseDavTime($('#dav-time').dataset.value),
+    weekday: Number($('#dav-week').dataset.value || 1),
+    day: Number($('#dav-day').dataset.value || 1),
     keep: Number($('#dav-keep').value || 10),
     tz: -new Date().getTimezoneOffset(),
   });
@@ -5304,14 +4827,44 @@ PAGES.settings = async () => {
     return j.config;
   };
 
-  $('#dav-freq').onchange = () => {
-    const v = $('#dav-freq').value;
+  const syncDavFreq = (v) => {
     $('#dav-week-wrap').style.display = v === 'weekly' ? '' : 'none';
     $('#dav-day-wrap').style.display = v === 'monthly' ? '' : 'none';
     paintDavHint();
   };
-  $('#dav-time').oninput = paintDavHint;
-  $('#dav-time').onchange = paintDavHint;
+  $('#dav-freq').onclick = () =>
+    mountChoicePicker($('#dav-freq'), {
+      value: $('#dav-freq').dataset.value,
+      cols: 3,
+      width: 240,
+      label: '备份周期',
+      options: ['daily', 'weekly', 'monthly'].map((k) => ({ value: k, label: DAV_FREQ_LABEL[k] })),
+      onPick: (val) => {
+        setPickField($('#dav-freq'), DAV_FREQ_LABEL[val] || val, val);
+        syncDavFreq(val);
+      },
+    });
+  $('#dav-time').onclick = () =>
+    mountTimePicker($('#dav-time'), {
+      value: $('#dav-time').dataset.value || nowHm(),
+      onPick: (v) => { setPickField($('#dav-time'), v, v); paintDavHint(); },
+    });
+  $('#dav-week').onclick = () =>
+    mountChoicePicker($('#dav-week'), {
+      value: $('#dav-week').dataset.value || '1',
+      label: isEn() ? 'Weekday' : '星期',
+      cols: 4,
+      options: [1, 2, 3, 4, 5, 6, 0].map((v) => ({ value: String(v), label: weekNameOf(v) })),
+      onPick: (v) => { setPickField($('#dav-week'), weekNameOf(v), v); paintDavHint(); },
+    });
+  $('#dav-day').onclick = () =>
+    mountChoicePicker($('#dav-day'), {
+      value: $('#dav-day').dataset.value || '1',
+      label: isEn() ? 'Day of month' : '每月几号',
+      cols: 7,
+      options: Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })),
+      onPick: (v) => { setPickField($('#dav-day'), isEn() ? v : `${v} 号`, v); paintDavHint(); },
+    });
   $('#dav-keep').oninput = paintDavHint;
   $('#dav-enabled').onchange = paintDavHint;
 
@@ -5333,7 +4886,7 @@ PAGES.settings = async () => {
     btn.textContent = '测试中…';
     try {
       const j = await apiJson('/api/backup/dav/test', { method: 'POST', body: davForm() });
-      $('#dav-status').innerHTML = `<span class="dav-ok">${j.needsCreate ? '连接成功，目录不存在，首次备份时会自动创建' : '连接成功，目录可访问'}</span>`;
+      $('#dav-status').innerHTML = `<span class="dav-ok">${j.needsCreate ? '连接成功 · 首次备份会创建目录' : '连接成功'}</span>`;
       toast('WebDAV 连接成功');
     } catch (err) {
       $('#dav-status').innerHTML = `<span class="dav-bad">${esc(err.message)}</span>`;
@@ -5416,10 +4969,10 @@ PAGES.settings = async () => {
 
     const data = { history: history.rows, ratings, watchlist: watchlist.rows, favorites: favorites.rows, lists };
     const payload = {
-      format: 'trakt-manager-backup',
+      format: 'trakt-backup',
       version: 1,
       createdAt: new Date().toISOString(),
-      app: 'trakt-manager',
+      app: 'Trakt',
       user: { username: state.user?.username || '', name: state.user?.name || '' },
       settings: { displayLanguage: getLang() },
       data,
@@ -5542,7 +5095,7 @@ PAGES.settings = async () => {
   $('#dav-files-btn').onclick = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    btn.textContent = '读取中…';
+    btn.textContent = '正在加载';
     try {
       const j = await apiJson('/api/backup/dav/files');
       renderDavFiles(j.files || []);
@@ -5562,17 +5115,83 @@ PAGES.settings = async () => {
   }
 };
 
-/* ───────── 通用弹层 ───────── */
+/* ───────── 通用弹层 ─────────
+   全站只有这一套：标题栏（含 ×）+ 正文（超高自己滚）+ 底部分隔线的按钮区。
+   宽度三档 sm/md/lg，调用处不要再写宽度。
+   用法：openModal({ title, body, actions, size, onClose }) */
 
-function openModal(html, extraClass = '') {
-  $('#modal-root').innerHTML = `<div class="modal-backdrop"><div class="card modal ${extraClass}">${html}</div></div>`;
-  document.querySelectorAll('[data-close]').forEach((b) => (b.onclick = closeModal));
-  $('.modal-backdrop').onclick = (e) => {
+const MODAL_SIZES = ['sm', 'md', 'lg'];
+let modalOnClose = null; // 用户主动关闭（× / 遮罩 / ESC）时回调；closeModal 里先清空，避免递归
+let modalReturnFocus = null;
+
+const modalFocusables = (box) =>
+  [...box.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(
+    (el) => !el.disabled && el.offsetParent !== null
+  );
+
+function onModalKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const box = $('#modal-root .modal');
+  if (!box) return;
+  const list = modalFocusables(box);
+  if (!list.length) return;
+  const first = list[0];
+  const last = list[list.length - 1];
+  const cur = document.activeElement;
+  if (e.shiftKey && (cur === first || !box.contains(cur))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (cur === last || !box.contains(cur))) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function openModal({ title = '', body = '', actions = '', size = 'sm', onClose = null } = {}) {
+  closeModal(); // 同时只允许一个弹窗，顺带清掉上一份残留
+  const cls = MODAL_SIZES.includes(size) ? `modal-${size}` : 'modal-sm';
+  modalReturnFocus = document.activeElement;
+  $('#modal-root').innerHTML = `
+    <div class="modal-backdrop">
+      <div class="card modal ${cls}" role="dialog" aria-modal="true"${title ? ' aria-labelledby="modal-title"' : ''}>
+        <div class="modal-head">
+          ${title ? `<h2 class="modal-title" id="modal-title">${title}</h2>` : '<span class="modal-title"></span>'}
+          <button class="modal-x" type="button" data-close aria-label="${isEn() ? 'Close' : '关闭'}">×</button>
+        </div>
+        <div class="modal-body">${body}</div>
+        ${actions ? `<div class="modal-actions">${actions}</div>` : ''}
+      </div>
+    </div>`;
+  modalOnClose = typeof onClose === 'function' ? onClose : null;
+
+  const root = $('#modal-root');
+  root.querySelectorAll('[data-close]').forEach((b) => (b.onclick = closeModal));
+  root.querySelector('.modal-backdrop').onclick = (e) => {
     if (e.target.classList.contains('modal-backdrop')) closeModal();
   };
+  document.documentElement.classList.add('modal-open');
+  document.addEventListener('keydown', onModalKey);
+  // 初始焦点给正文第一个可操作控件（输入框 / 选项），没有就落到 ×，键盘不会丢
+  const firstField = modalFocusables(root.querySelector('.modal-body'))[0];
+  requestAnimationFrame(() => (firstField || root.querySelector('.modal-x'))?.focus({ preventScroll: true }));
 }
+
 function closeModal() {
+  // 弹窗里可能开着日期 / 时间浮层，锚点随弹窗一起消失，先收掉
+  closePicker();
+  const cb = modalOnClose;
+  modalOnClose = null;
   $('#modal-root').innerHTML = '';
+  document.documentElement.classList.remove('modal-open');
+  document.removeEventListener('keydown', onModalKey);
+  if (modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus({ preventScroll: true });
+  modalReturnFocus = null;
+  if (cb) cb();
   if (state.dirty) {
     state.dirty = false;
     if (PAGES[state.route]) PAGES[state.route]();
@@ -5581,14 +5200,24 @@ function closeModal() {
 
 function confirmDialog(title, desc = '') {
   return new Promise((resolve) => {
-    openModal(`<h3>${esc(title)}</h3><p class="note">${esc(desc)}</p>
-      <div class="modal-actions"><button class="btn" data-close>取消</button>
-      <button class="btn btn-danger" id="cf-ok">确认</button></div>`);
+    let settled = false;
+    openModal({
+      title: esc(title),
+      body: desc ? `<p class="note">${esc(desc)}</p>` : '',
+      actions: `<button class="btn" data-close>取消</button>
+        <button class="btn btn-danger" id="cf-ok">确认</button>`,
+      // 点遮罩 / ESC / × 都算取消：这里必须 resolve(false)，否则 await 永远挂住
+      onClose: () => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      },
+    });
     $('#cf-ok').onclick = () => {
+      settled = true;
       closeModal();
       resolve(true);
     };
-    document.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => { closeModal(); resolve(false); }));
   });
 }
 
@@ -5626,3 +5255,7 @@ async function boot(skipSession = false) {
 
 initI18n();
 boot();
+
+
+
+

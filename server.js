@@ -72,20 +72,21 @@ async function serveStatic(pathname, res) {
       res.writeHead(404).end('Not Found');
       return;
     }
-    res.writeHead(200, { 'content-type': MIME['.html'] }).end(body);
+    res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }).end(body);
     return;
   }
   const ext = path.extname(file);
   const noCache = ['.html', '.js', '.css'].includes(ext);
   res.writeHead(200, {
     'content-type': MIME[ext] || 'application/octet-stream',
-    // 前端资源不缓存，改完刷新即生效；其它静态资源短缓存
-    'cache-control': noCache ? 'no-cache, must-revalidate' : 'public, max-age=300',
+    // 前端资源一律不缓存（no-store 连启发式缓存也禁掉），改完刷新即生效；其它静态资源短缓存
+    'cache-control': noCache ? 'no-store' : 'public, max-age=300',
   }).end(body);
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  if (process.env.LOG_REQUESTS) console.log(`[req] ${req.method} ${req.url}`);
 
   if (!url.pathname.startsWith('/api/')) {
     await serveStatic(url.pathname, res);

@@ -19,9 +19,8 @@ __pycache__/
 # 远端只放运行时代码：本地测试、文档、截图、设计稿与接手上下文不进仓库
 /tests/
 /docs/
-/trakt_project_docs/
-/figures/
-/design-system/
 /.preview/
 /.codebuddy/
 /.agents/
+# 接手文档留在本地，不推仓库；README 作为仓库门面正常发布
+/AGENTS.md

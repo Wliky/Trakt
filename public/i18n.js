@@ -74,8 +74,10 @@ const EN = {
   这一年: 'This year',
   本年观看: 'This year',
   仅统计最近部分: 'recent slice only',
-  没有看到一半的条目: 'Nothing half-watched',
-  播放器上报续播点后会出现在这里: 'Items show up here once a player reports a position',
+  '按最近观看倒序': 'Sorted by recent activity',
+  没有待看的条目: 'Nothing to continue',
+  在看的剧有新一集播出时会出现在这里: 'New episodes of shows you watch show up here',
+  下一集: 'Next up',
   所选时段暂无观看记录: 'No plays in this period',
   所选时段暂无观影感受: 'No ratings in this period',
   未知条目: 'Unknown item',
@@ -114,9 +116,9 @@ const EN = {
   '换个关键词，或试试原名': 'Try another keyword or the original title',
   输入关键词开始搜索: 'Type a keyword to start searching',
   试试这些: 'Try these',
-  '搜索电影或剧集，中英文都行': 'Search movies or shows — Chinese or English',
+  搜索电影或剧集: 'Search movies or shows',
   评分: 'Rating',
-  '结果来自 Trakt 全站，不受「只能操作已看内容」的限制': 'Results come from all of Trakt, not just what you have watched',
+  '支持中英文片名与原名': 'Chinese titles, English titles, and original titles all work',
   '输入电影或剧集名称（支持中英文）': 'Movie or show name (Chinese or English)',
 
   // 片单表格
@@ -134,7 +136,6 @@ const EN = {
   返回记录: 'Back to history',
   当前计划: 'Schedule',
   自定义列表: 'Custom lists',
-  '还没有自定义列表，点右上角新建': 'No custom lists yet. Create one from the top right',
   'Watchlist 是空的': 'Watchlist is empty',
 
   // 通用
@@ -156,7 +157,7 @@ const EN = {
   展开: 'Expand',
   收起: 'Collapse',
   重试: 'Retry',
-  '加载中…': 'Loading…',
+  正在加载: 'Loading…',
   更多: 'More',
   上一页: 'Prev',
   下一页: 'Next',
@@ -186,7 +187,6 @@ const EN = {
   没有匹配: 'No matches for',
 
   // 列表页
-  新建列表: 'New list',
   导出CSV: 'Export CSV',
   '导出 CSV': 'Export CSV',
   移出Watchlist: 'Remove from watchlist',
@@ -194,13 +194,8 @@ const EN = {
   取消收藏: 'Remove from favorites',
   私有: 'Private',
   无描述: 'No description',
-  列表为空: 'This list is empty',
   'Watchlist 是空的': 'Watchlist is empty',
   还没有收藏的电影或剧集: 'No favorite movies or shows yet',
-  '还没有自定义列表，点右上角新建': 'No custom lists yet — create one from the top-right',
-  加条目: 'Add items',
-  点击展开查看条目: 'Click to expand',
-  'Watchlist 与自定义列表的增删管理': 'Manage watchlist and custom lists',
   '想看的电影/剧集': 'Movies and shows you plan to watch',
 
   // 详情页
@@ -250,10 +245,10 @@ const EN = {
   '影视标题、简介与高清剧照': 'Titles, overviews, and high-resolution artwork',
   'Key 仅保存在服务端。可在 themoviedb.org 免费申请。': 'The key stays on the server. Get one free at themoviedb.org.',
   封面: 'Cover',
-  '待看、收藏与自定义列表；切换在表格顶部，勾选后可批量处理':
-    'Watchlist, favorites and custom lists — switch at the top of the table, select rows to act in bulk',
-  'Trakt 全站搜索：点条目进详情，可直接加入待看':
-    'Search all of Trakt: open a row for details, or add it to your watchlist right away',
+  '待看与收藏；切换在表格顶部，勾选后可批量处理':
+    'Watchlist and favorites — switch at the top of the table, select rows to act in bulk',
+  '搜索 Trakt 全站，可直接加入待看':
+    'Search all of Trakt — add anything to your watchlist right away',
 
   // 详情页管理卡（已从封面右侧移到封面下方）
   管理: 'Manage',
@@ -301,7 +296,8 @@ const EN = {
   发送验证码: 'Send code',
   验证码: 'Code',
   验证: 'Verify',
-  '输入邮箱，我们会发送 6 位验证码': 'Enter your email to receive a 6-digit code',
+  '数据来自 Trakt.tv 官方 API，用 Trakt 账号邮箱登录即可。':
+    'Data comes from the official Trakt API — sign in with your Trakt account email.',
 
   // 错误/空态
   出错: 'Something went wrong',
@@ -315,19 +311,13 @@ const EN = {
   '搜索中…': 'Searching…',
 
   // 登录页
-  数据管理面板: 'Data manager',
-  邮箱登录: 'Sign in with email',
-  '使用 Trakt 账号邮箱登录，会向邮箱发送 6 位验证码。无需创建 OAuth 应用，不占用授权名额。':
-    'Sign in with your Trakt account email — we send a 6-digit code. No OAuth app needed.',
-  输入验证码: 'Enter code',
-  '6 位验证码': '6-digit code',
-  粘贴验证码: 'Paste code',
-  '换邮箱 / 重新发送': 'Change email / resend',
-  '无法读取剪贴板，请手动输入': 'Cannot read the clipboard — type the code manually',
-  // 段落里夹着 <b>auth.trakt.tv</b>，只能按文本节点分片翻译
-  '登录走的是 Trakt 网页版的官方认证链路（': 'Sign-in follows the official Trakt web flow (',
-  '邮箱验证码 → 会话 → OIDC 授权码 → 令牌）， 凭证只保存在本服务端，浏览器仅持有 HttpOnly 会话 cookie。令牌约 7 天有效，会自动轮换续期。':
-    ' email code → session → OIDC code → token). Credentials stay on this server; the browser only holds an HttpOnly session cookie. Tokens last about 7 days and rotate automatically.',
+  观影中心: 'Viewing Center',
+  '验证码已发送至': 'Sent to',
+  '，5 分钟内有效。': ', valid for 5 minutes.',
+  修改邮箱: 'Change email',
+  重新发送验证码: 'Resend code',
+  '还没有账号？': 'No account yet?',
+  创建账号: 'Create account',
 
   // 设置页
   '媒体来源、数据备份与恢复': 'Media sources, backups, and restore',
@@ -389,7 +379,6 @@ const EN = {
   '切换列表 / 海报网格视图': 'Toggle list / poster grid',
 
   // 页面标题与说明
-  '待看、自定义列表与收藏': 'Watchlist, custom lists, and favorites',
   '待看 / 我的列表': 'Watchlist / My lists',
   'Trakt 的 Favorites（最喜欢的电影/剧集）': 'Trakt Favorites (movies & shows you love)',
   '搜索 Trakt 全站影视；点行再看详情做标记 / 评分 / 加待看':
@@ -398,9 +387,6 @@ const EN = {
     'Monthly air dates; pick a day to see that day\u2019s episodes',
   '观看节奏、类型分布与近期动态': 'Watch rhythm, genres, and recent activity',
   '按月回看观看记录，点某天在右侧看详情': 'Browse history by month; pick a day for details',
-  评分管理: 'Ratings',
-  '改分即时生效，0 分等于删除评分；下方汇总同一分类下的剧评':
-    'Changes apply immediately; 0 removes the rating',
 };
 
 /** 动态文案：数字/名称变化的那些，用正则处理 */

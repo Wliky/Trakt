@@ -60,15 +60,26 @@
   --fs-2xl: 26px;
   --fs-3xl: 34px;
   --fs-4xl: 38px;
-  --lh-tight: 1.25;
+  /* 行高 6 档：大数字/图标用 none，超大标题用 display，正文按字数密度选 base/loose */
+  --lh-none: 1;
+  --lh-display: 1.15;
+  --lh-tight: 1.3;
   --lh-snug: 1.45;
   --lh-base: 1.6;
   --lh-loose: 1.75;
+  /* 字重只用标准 5 档：系统字体的 520/680 会被取整，视觉不可控 */
   --fw-normal: 400;
-  --fw-medium: 520;
+  --fw-medium: 500;
   --fw-semi: 600;
-  --fw-bold: 680;
-  --fw-black: 780;
+  --fw-bold: 700;
+  --fw-black: 800;
+  --tracking-tight: -.25px;
+  --tracking-tighter: -.4px;
+  --tracking-num: -1.4px;
+  --tracking-display: -.02em;
+  --tracking-heading: .012em;
+  --tracking-kicker: .12em;
+  --tracking-tag: .04em;
   --tracking-wide: .3px;
   --tracking-caps: .6px;
 
@@ -127,6 +138,8 @@
   --on-accent: var(--brand-ink);
   --accent-2: #ff7a45;
   --grad-accent: linear-gradient(180deg, #ff5a5f, var(--accent));
+  /* Trakt 官方标识色（官网 favicon 的紫底），只给品牌方块用，不参与 UI 强调色 */
+  --brand-trakt: #6438d0;
 
   /* 状态 */
   --ok: var(--ok-500);
@@ -150,6 +163,7 @@
   --glass-strong: rgba(27, 30, 36, .94);
   --backdrop: rgba(5, 6, 8, .62);
   --glow-accent: rgba(237, 28, 36, .42);
+  --glow-trakt: rgba(100, 56, 208, .42);
   --shadow-img: 0 1px 3px rgba(0, 0, 0, .35);
 
   /* 沉浸背景：图层参数 + 遮罩（浅色在下方 light 块覆盖） */
@@ -176,7 +190,7 @@
 
   /* 字体：自托管离线优先，不引外部字体请求；数据用等宽数字 */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Songti SC", "Source Han Serif SC", "Noto Serif SC", "STSong", "SimSun", serif;
+  --font-display: "Songti SC", "Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC", "STSong", ui-serif, "SimSun", serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* 详情 Hero（浅色在下方 light 块覆盖） */
@@ -286,6 +300,7 @@
   --row-hover: #f6f7fa;
   --backdrop: rgba(16, 20, 26, .34);
   --glow-accent: rgba(237, 28, 36, .26);
+  --glow-trakt: rgba(100, 56, 208, .26);
   --shadow-img: 0 1px 3px rgba(16, 24, 40, .18);
 
   /* 沉浸背景：浅色下压亮、加重白雾，保证正文对比度 */
