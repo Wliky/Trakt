@@ -5257,14 +5257,20 @@ PAGES.settings = async () => {
     $('#dav-files').innerHTML = '';
   };
 
-  // 界面把「服务器地址 / 备份路径」拆成两栏，提交时再拼成完整 URL（老配置只有 url，读出来自动拆开）
+  // 界面把「服务器地址 / 备份路径」拆成两栏，提交时再拼成完整 URL（老配置只有 url，读出来自动拆开）。
+  // 末段才是备份目录，前面整段留给服务器地址——坚果云的根是 https://dav.jianguoyun.com/dav，
+  // 如果把 /dav 挪进「备份路径」，用户会以为它多余而删掉，拼出来的地址就全错了。
   const splitDav = (raw) => {
     const s = String(raw || '').trim();
     if (!s) return { base: '', path: '' };
     try {
       const u = new URL(/^[a-z]+:\/\//i.test(s) ? s : `https://${s}`);
       const p = u.pathname.replace(/\/+$/, '');
-      return { base: u.origin, path: p === '' || p === '/' ? '' : p };
+      if (!p || p === '/') return { base: u.origin, path: '' };
+      const cut = p.lastIndexOf('/');
+      // 只有一段路径（https://dav.jianguoyun.com/dav）时整段都属于服务器地址
+      if (cut <= 0) return { base: `${u.origin}${p}`, path: '' };
+      return { base: `${u.origin}${p.slice(0, cut)}`, path: p.slice(cut) };
     } catch {
       return { base: s, path: '' };
     }
@@ -5346,8 +5352,11 @@ PAGES.settings = async () => {
       await saveDav(false);
       const j = await apiJson('/api/backup/dav/run', { method: 'POST', body: {} });
       paintDav(j.config);
-      $('#dav-status').innerHTML = `<span class="dav-ok">已上传「${esc(j.name)}」</span>${j.cleanupWarning ? `<span class="note" style="display:block">${esc(j.cleanupWarning)}</span>` : ''}`;
-      toast('已备份到 WebDAV');
+      const cut = j.truncated && Object.values(j.truncated).some(Boolean)
+        ? `<span class="note" style="display:block">数据量超过单次请求上限，本次备份是部分的（观看历史 ${num(j.counts?.history || 0)} 条等），恢复时请留意</span>`
+        : '';
+      $('#dav-status').innerHTML = `<span class="dav-ok">已上传「${esc(j.name)}」</span>${cut}${j.cleanupWarning ? `<span class="note" style="display:block">${esc(j.cleanupWarning)}</span>` : ''}`;
+      toast(cut ? '已备份（部分数据）' : '已备份到 WebDAV');
     } catch (err) {
       $('#dav-status').innerHTML = `<span class="dav-bad">${esc(err.message)}</span>`;
       toast(err.message, true);
