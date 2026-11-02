@@ -104,6 +104,7 @@
   --z-float: 40;
   --z-nav: 60;
   --z-topbar: 61;
+  --z-drawer: 70;
   --z-modal: 90;
   --z-toast: 99;
 
@@ -218,6 +219,7 @@
      3. Component
      ========================================================================== */
   --nav-w: 216px;
+  --nav-w-rail: 64px;
   --topbar-h: 56px;
   --nav-h: 58px;
   --main-max: 1180px;

@@ -1,4 +1,4 @@
-﻿// Trakt Manager 前端：无框架，hash 路由 + 服务端会话
+// Trakt Manager 前端：无框架，hash 路由 + 服务端会话
 // 通用渲染片段（标题单元 / 海报 / 空态 / 错误态 / 分页器）在 ui.js
 import {
   esc,
@@ -19,7 +19,7 @@ import {
 import { initI18n, t, getLang, setLang, LANGS } from './i18n.js';
 
 // 前端版本：排查缓存时在控制台执行 __TM_VERSION__，对不上就是浏览器还在用旧文件
-window.__TM_VERSION__ = '202611020251';
+window.__TM_VERSION__ = '202611021750';
 
 // Trakt 官方 mark（取自 trakt.tv/favicon.svg 的矢量原样，48 格紫底白线）：
 // 站点 favicon（public/favicon.svg）与品牌方块共用同一份图形，改一处要一起改
@@ -944,6 +944,86 @@ const LEGACY_ROUTES = {
   stats: 'dashboard',
 };
 
+/**
+ * 侧栏三态：full（216px 带文字）/ rail（64px 只留图标）/ hidden（0，完全收起）。
+ * 桌面与移动端共用同一套 grid 布局：侧栏在网格里占位，宽度过渡就是动画，
+ * 背板始终透明——移动端不再有盖在内容上、带遮罩的白底抽屉。
+ */
+const NAV_STATE_KEY = 'tm_nav_state';
+const NAV_STATES = ['full', 'rail', 'hidden'];
+const NAV_NARROW = '(max-width: 900px)';
+
+function isNarrow() {
+  return typeof matchMedia === 'function' && matchMedia(NAV_NARROW).matches;
+}
+
+function navState() {
+  let saved = null;
+  try {
+    const v = localStorage.getItem(NAV_STATE_KEY);
+    if (NAV_STATES.includes(v)) saved = v;
+  } catch {}
+  // 手机上不提供 full：216px 会把正文压到 174px，卡片里的分段控件直接溢出。
+  // 窄屏只有「图标栏 / 完全收起」两态，桌面仍保留三态。
+  if (isNarrow()) return saved === 'hidden' ? 'hidden' : 'rail';
+  return saved || 'full';
+}
+
+/** 写状态 + 同步侧栏头按钮与页头那枚 ☰ 的展开态 */
+function applyNavState(next, persist = true) {
+  const shellEl = document.querySelector('.shell');
+  if (!shellEl) return;
+  const wanted = NAV_STATES.includes(next) ? next : 'full';
+  // 窄屏兜底：从桌面全宽缩到手机时，就地钳成图标栏
+  const val = isNarrow() && wanted === 'full' ? 'rail' : wanted;
+  shellEl.dataset.navState = val;
+  if (persist) {
+    try { localStorage.setItem(NAV_STATE_KEY, val); } catch {}
+  }
+  const open = isNarrow() ? val === 'rail' : val === 'full';
+  const toggle = $('#nav-toggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.title = open ? '收起' : '展开';
+    toggle.innerHTML = ICON.panel;
+  }
+  const reveal = $('#nav-reveal');
+  if (reveal) reveal.setAttribute('aria-expanded', String(open));
+  // 收起后侧栏里的导航项不该再被 Tab 选中
+  const sidebar = $('#nav-sidebar');
+  if (sidebar) sidebar.inert = val === 'hidden';
+}
+
+/** 桌面三态循环：全宽 → 图标栏 → 完全收起 → 全宽；手机上只有「图标栏 ⇄ 收起」 */
+function cycleNav() {
+  const cur = document.querySelector('.shell')?.dataset.navState || 'full';
+  if (isNarrow()) {
+    applyNavState(cur === 'hidden' ? 'rail' : 'hidden');
+    return;
+  }
+  const i = NAV_STATES.indexOf(cur);
+  applyNavState(NAV_STATES[(i + 1) % NAV_STATES.length]);
+}
+
+/** 页头 ☰ 每次路由都会重建，绑一次 document 委托即可 */
+let navRevealBound = false;
+function bindNavReveal() {
+  if (navRevealBound) return;
+  navRevealBound = true;
+  document.addEventListener('click', (e) => {
+    if (e.target instanceof Element && e.target.closest('#nav-reveal')) cycleNav();
+  });
+}
+
+/** 退出登录：入口在设置页的账号卡（侧栏只留头像，不再挂小图标） */
+async function logout() {
+  if (!(await confirmDialog('退出登录？', '会清除本机的登录状态与设备令牌，下次进入需要重新输入邮箱验证码。'))) return;
+  await fetch('/api/auth/logout', { method: 'POST', headers: apiHeaders() });
+  try { localStorage.removeItem(DEVICE_KEY); } catch {}
+  state.user = null;
+  renderLogin();
+}
+
 /* ───────── 主题（设计令牌配套，见 styles.css 的 :root） ───────── */
 
 const THEME_KEY = 'tm_theme';
@@ -1146,21 +1226,28 @@ function backdropLayer() {
 function shell() {
   const name = state.user?.name || state.user?.username || 'U';
   const initial = name.slice(0, 1).toUpperCase();
-  const mode = themeMode();
+  const nav = navState();
+  // 窄屏只有图标栏 / 收起两态，按钮语义跟着变：rail 是「收起」，hidden 是「展开」
+  const navOpen = isNarrow() ? nav === 'rail' : nav === 'full';
+  // 「设置」不再是导航项：头像就是设置入口（rail 态靠气泡提示文字）
+  const items = NAV.filter(([k]) => k !== 'settings');
   app().innerHTML = `
   ${backdropLayer()}
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">${TRAKT_MARK}</div>
-        <div class="brand-text">
-          <div class="brand-name">Trakt</div>
-          <div class="brand-sub">${t('观影中心')}</div>
+  <div class="shell" data-nav-state="${nav}">
+    <aside class="sidebar" id="nav-sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <div class="brand-mark">${TRAKT_MARK}</div>
+          <div class="brand-text">
+            <div class="brand-name">Trakt</div>
+            <div class="brand-sub">${t('观影中心')}</div>
+          </div>
         </div>
+        <button class="nav-toggle" id="nav-toggle" aria-controls="nav-sidebar" aria-expanded="${navOpen}" aria-label="切换侧栏" title="${navOpen ? '收起' : '展开'}">${ICON.panel}</button>
       </div>
-      <nav class="nav">${NAV.map(([k, ic, label]) => `<div class="nav-item" data-nav="${k}"><span class="ic">${ic}</span>${label}</div>`).join('')}</nav>
+      <nav class="nav">${items.map(([k, ic, label]) => `<div class="nav-item" data-nav="${k}"><span class="ic">${ic}</span><span class="nav-label">${esc(label)}</span><span class="nav-tip">${esc(label)}</span></div>`).join('')}</nav>
       <div class="sidebar-foot">
-        <div class="user-chip">
+        <a class="user-chip" id="nav-user" href="#/settings" data-nav="settings">
           ${state.user?.avatar
             ? `<img class="avatar avatar-img" id="user-avatar" src="/api/avatar" alt="${esc(name)}" />`
             : `<div class="avatar">${esc(initial)}</div>`}
@@ -1168,19 +1255,28 @@ function shell() {
             <div class="user-name">${esc(name)}</div>
             <div class="user-sub">@${esc(state.user?.username || '')}</div>
           </div>
-          <div class="foot-actions">
-            <button class="icon-btn" id="btn-theme" title="主题：${THEME_LABEL[mode]}（点击切换）" aria-label="切换主题">${THEME_ICON[mode]}</button>
-            <button class="icon-btn" id="btn-logout" title="退出登录" aria-label="退出登录">${ICON.power}</button>
-          </div>
-        </div>
+          <span class="nav-tip">设置</span>
+        </a>
       </div>
     </aside>
     <main class="main" id="view"></main>
   </div>`;
 
-  document.querySelectorAll('[data-nav]').forEach((el) => {
+  $('#nav-toggle').onclick = cycleNav;
+  $('#nav-sidebar').inert = nav === 'hidden';
+  bindNavReveal();
+
+  document.querySelectorAll('.nav-item[data-nav]').forEach((el) => {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'link');
     el.onclick = () => {
       location.hash = `#/${el.dataset.nav}`;
+    };
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        el.click();
+      }
     };
   });
   // 头像取不到（未设置 / 代理失败）时回落到首字母
@@ -1193,21 +1289,6 @@ function shell() {
       avatar.replaceWith(fallback);
     };
   }
-  $('#btn-theme').onclick = () => {
-    const order = ['auto', 'dark', 'light'];
-    const next = order[(order.indexOf(themeMode()) + 1) % order.length];
-    setTheme(next);
-    const btn = $('#btn-theme');
-    btn.innerHTML = THEME_ICON[next];
-    btn.title = `主题：${THEME_LABEL[next]}（点击切换）`;
-  };
-  $('#btn-logout').onclick = async () => {
-    if (!(await confirmDialog('退出登录？', '会清除本机的登录状态与设备令牌，下次进入需要重新输入邮箱验证码。'))) return;
-    await fetch('/api/auth/logout', { method: 'POST', headers: apiHeaders() });
-    try { localStorage.removeItem(DEVICE_KEY); } catch {}
-    state.user = null;
-    renderLogin();
-  };
   applyBackdrop();
   route();
 }
@@ -1257,9 +1338,27 @@ window.addEventListener('hashchange', () => {
   if (state.user) route();
 });
 
+/* 侧栏：只在窗口宽度变化时重算 —— 手机地址栏伸缩同样会触发 resize，不必重排 */
+let navViewportW = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth === navViewportW) return;
+  navViewportW = window.innerWidth;
+  const shellEl = document.querySelector('.shell');
+  if (shellEl) applyNavState(navState(), false);
+});
+
+/**
+ * 页头：左「标题 + 一句说明」，右工具条。
+ * 那枚 ☰ 只在侧栏完全收起（hidden）时出现，排在工具条最前，与页面动作按钮同一行。
+ */
 function head(title, sub, actions = '') {
-  return `<div class="page-head"><div><h1>${esc(title)}</h1><div class="sub">${esc(sub)}</div></div>
-    <div class="toolbar">${actions}</div></div>`;
+  return `<div class="page-head">
+    <div class="page-head-text">
+      <div class="page-head-title"><h1>${esc(title)}</h1><button type="button" class="nav-reveal" id="nav-reveal" aria-label="展开侧栏" title="展开侧栏">${ICON.panel}</button></div>
+      <div class="sub">${esc(sub)}</div>
+    </div>
+    <div class="toolbar">${actions}</div>
+  </div>`;
 }
 
 /**
@@ -2157,14 +2256,16 @@ PAGES.search = async () => {
         <div class="seg" id="s-type" role="group" aria-label="按类型筛选">
           ${SEARCH_TYPES.map(([v, l]) => `<button data-stype="${v}" class="${st.type === v ? 'active' : ''}">${l}</button>`).join('')}
         </div>
-        <label class="episode-search search-input">
-          <span aria-hidden="true">${ICON.search}</span>
-          <input id="s-q" type="search" value="${esc(st.q)}" placeholder="搜索电影或剧集"
-            autocomplete="off" spellcheck="false" aria-label="搜索电影或剧集">
-        </label>
-        <div class="episode-toolbar-pager">
-          <span class="lib-count" id="s-hint"></span>
-          <button class="btn btn-primary btn-sm" id="s-go">搜索</button>
+        <div class="search-line">
+          <label class="episode-search search-input">
+            <span aria-hidden="true">${ICON.search}</span>
+            <input id="s-q" type="search" value="${esc(st.q)}" placeholder="搜索电影或剧集"
+              autocomplete="off" spellcheck="false" aria-label="搜索电影或剧集">
+          </label>
+          <div class="episode-toolbar-pager">
+            <span class="lib-count" id="s-hint"></span>
+            <button class="btn btn-primary btn-sm" id="s-go">搜索</button>
+          </div>
         </div>
       </div>
       <div class="episode-table-wrap search-table-wrap" id="s-result"></div>
@@ -3035,6 +3136,7 @@ function ovContinueCard(list) {
  * 差得不多就均摊进行距正好铺到卡片底边（既不留白也不露毛边），差得多就直接铺满、
  * 末行露半截当「还有更多」的提示。单列（窄屏）没有同行卡，就让卡片按内容自然长高。
  */
+const CONT_MIN_ROW = 24; // 半行高度：继续观看卡剩余空间小于它时不算「真空间」，见下方取整说明
 function fitContList(root = document) {
   root.querySelectorAll?.('.ov-cont-list').forEach((list) => {
     const card = list.closest('.ov-cont');
@@ -3049,8 +3151,11 @@ function fitContList(root = document) {
     // 再把这部分空间还给列表
     list.style.rowGap = '';
     list.style.maxHeight = '0px';
+    // clientHeight 是取整后的整数，chrome 带小数：单列（窄屏）时两者相减会剩下 0~0.5px 的
+    // 「假空间」，照它分配会把列表压成 0 高（手机字体下 head 高度常带小数，就是这来的）。
+    // 不足半行的余量一律当归零：清空 max-height，让卡片按内容自然长高。
     const avail = card.clientHeight - chrome;
-    if (avail <= 0) {
+    if (avail < CONT_MIN_ROW) {
       list.style.maxHeight = ''; // 单列没有同行卡：按内容自然长高，交给页面滚动
       return;
     }
@@ -4112,10 +4217,30 @@ PAGES.settings = async () => {
   // 遮罩这一项带前缀（「遮罩：柔和」），和来源并排时一眼知道这行在选什么
   const dimPrefix = isEn() ? 'Dim: ' : '遮罩：';
   const mode = themeMode();
+  const acctName = state.user?.name || state.user?.username || '';
+  const acctHandle = state.user?.username || '';
+  const acctInitial = acctName.slice(0, 1).toUpperCase();
+  // 名字和 handle 撞车时就别再重复一遍 @Wliky，改一行状态说明
+  const acctSub = acctHandle && acctHandle.toLowerCase() !== acctName.toLowerCase() ? `@${esc(acctHandle)}` : '已连接 Trakt';
   $('#view').innerHTML =
     head('设置', '外观、媒体来源与数据备份', '') +
     `<div class="settings">
-    <section class="card settings-card">
+   <section class="card settings-card account-card">
+     <div class="account-row">
+       <div class="account-id">
+         ${state.user?.avatar
+           ? `<img class="avatar avatar-lg avatar-img" id="settings-avatar" src="/api/avatar" alt="${esc(acctName)}" />`
+           : `<div class="avatar avatar-lg">${esc(acctInitial)}</div>`}
+         <div class="account-text">
+           <div class="account-name">${esc(acctName)}</div>
+           <div class="account-sub">${acctSub}</div>
+         </div>
+       </div>
+       <button class="btn" id="btn-logout">退出登录</button>
+     </div>
+   </section>
+
+   <section class="card settings-card">
       ${settingsHead(ICON.palette, '外观与语言', '主题、语言与全局背景')}
       <div class="settings-row">
         <div>
@@ -4167,28 +4292,34 @@ PAGES.settings = async () => {
     </section>
 
     <section class="card settings-card">
-      ${settingsHead(ICON.database, '数据备份与恢复', isEn() ? 'Watch data only, no credentials — restore writes to your Trakt account' : '只含观影数据、不含凭据；恢复会写入 Trakt 账号')}
-      <div class="settings-foot">
-        <button class="btn" id="backup-preview">查看备份范围</button>
-        <button class="btn btn-primary" id="backup-download">下载完整备份</button>
-        <button class="btn" id="restore-pick">从备份文件恢复…</button>
-        <input id="restore-file" type="file" accept=".json,application/json" hidden />
-      </div>
-      <div id="backup-status" class="settings-status" style="margin-top:10px"></div>
-    </section>
-
-    <section class="card settings-card dav-card">
-      ${settingsHead(ICON.cloud, 'WebDAV 云备份', isEn() ? 'Nutstore / Nextcloud / Synology — the password stays on the server' : '坚果云 / Nextcloud / 群晖；密码只存服务端')}
-      <div class="dav-toggle-row">
-        <div>
-          <div class="dav-toggle-label">启用自动备份</div>
-          <div class="dav-toggle-hint" id="dav-enabled-hint">未启用 · 保存后可手动备份</div>
+      ${settingsHead(ICON.database, '备份与恢复', isEn() ? 'Watch data only, no credentials — keep a local file or sync to WebDAV' : '只含观影数据、不含凭据；可存本机，也可同步到 WebDAV')}
+      <div class="bk-block">
+        <div class="bk-head">
+          <div>
+            <div class="bk-title">本机文件</div>
+            <div class="bk-sub">${isEn() ? 'Export a JSON file, or restore it to your Trakt account' : '导出一份 JSON，或用备份文件恢复 Trakt 账号'}</div>
+          </div>
         </div>
-        <label class="switch" aria-label="启用自动备份">
-          <input id="dav-enabled" type="checkbox" />
-          <span class="switch-track"></span>
-        </label>
+        <div class="bk-actions">
+          <button class="btn" id="backup-preview">查看备份范围</button>
+          <button class="btn btn-primary" id="backup-download">下载完整备份</button>
+          <button class="btn" id="restore-pick">恢复备份</button>
+          <input id="restore-file" type="file" accept=".json,application/json" hidden />
+        </div>
+        <div id="backup-status" class="settings-status"></div>
       </div>
+
+      <div class="bk-block dav-block">
+        <div class="bk-head">
+          <div>
+            <div class="bk-title">WebDAV 云备份</div>
+            <div class="bk-sub" id="dav-enabled-hint">未启用 · 保存后可手动备份</div>
+          </div>
+          <label class="switch" aria-label="启用自动备份">
+            <input id="dav-enabled" type="checkbox" />
+            <span class="switch-track"></span>
+          </label>
+        </div>
       <div class="dav-grid">
         <div class="dav-config">
           <div class="dav-block-title">连接</div>
@@ -4229,7 +4360,7 @@ PAGES.settings = async () => {
             <button class="btn" id="dav-test">测试连接</button>
             <button class="btn btn-primary" id="dav-save">保存设置</button>
           </div>
-          <div id="dav-status" class="note" style="margin-top:12px"></div>
+          <div id="dav-status" class="note"></div>
         </div>
 
         <div class="dav-summary">
@@ -4242,18 +4373,19 @@ PAGES.settings = async () => {
             ${davRow('备份数量', 'dav-counts')}
             ${davRow('当前计划', 'dav-plan')}
           </div>
-          <div class="dav-block-title" style="margin-top:18px">手动操作</div>
-          <button class="btn btn-primary dav-primary-wide" id="dav-run">立即备份一次</button>
-          <div class="dav-secondary">
-            <button class="btn" id="dav-files-btn">查看远端备份</button>
-            <button class="btn" id="dav-download-btn">下载本地备份</button>
-            <button class="btn" id="dav-preview-btn">查看备份范围</button>
-            <button class="btn" id="dav-restore-btn">从文件恢复</button>
+          <div class="dav-foot">
+            <div class="dav-block-title">手动操作</div>
+            <div class="dav-manual">
+              <button class="btn btn-primary" id="dav-run">立即备份一次</button>
+              <button class="btn" id="dav-files-btn" aria-expanded="false" aria-controls="dav-files">查看远端备份</button>
+            </div>
           </div>
         </div>
       </div>
+      </div>
+
+      <div class="bk-block" id="dav-files" hidden></div>
     </section>
-    <div id="dav-files"></div>
 
     <section class="card settings-card">
       ${settingsHead(ICON.info, '运行状态', '版本号与当前生效的数据源')}
@@ -4345,10 +4477,21 @@ PAGES.settings = async () => {
       document.querySelectorAll('#theme-seg [data-theme-opt]').forEach((x) => {
         x.classList.toggle('active', x === b);
       });
-      const btn = $('#btn-theme');
-      if (btn) btn.innerHTML = THEME_ICON[themeMode()];
     };
   });
+
+  $('#btn-logout').onclick = logout;
+
+  // 头像走服务端代理，取不到（未设置 / 代理失败）时回落首字母，不留破图
+  const acctAvatar = $('#settings-avatar');
+  if (acctAvatar) {
+    acctAvatar.onerror = () => {
+      const fallback = document.createElement('div');
+      fallback.className = 'avatar avatar-lg';
+      fallback.textContent = acctInitial;
+      acctAvatar.replaceWith(fallback);
+    };
+  }
 
   // 来源与遮罩已经写在按钮上了，这一行只说「现在有没有在轮播」
   $('#bg-status').textContent =
@@ -4777,7 +4920,15 @@ PAGES.settings = async () => {
         ? '保存后计算'
         : '未启用';
     $('#dav-status').textContent = '';
-    $('#dav-files').innerHTML = '';
+    // 配置重绘后远端列表回到「未展开」：留着旧文件列表会和新的连接信息对不上
+    const filesBox = $('#dav-files');
+    filesBox.innerHTML = '';
+    filesBox.hidden = true;
+    const filesBtn = $('#dav-files-btn');
+    if (filesBtn) {
+      filesBtn.textContent = '查看远端备份';
+      filesBtn.setAttribute('aria-expanded', 'false');
+    }
   };
 
   // 界面把「服务器地址 / 备份路径」拆成两栏，提交时再拼成完整 URL（老配置只有 url，读出来自动拆开）。
@@ -5032,36 +5183,54 @@ PAGES.settings = async () => {
     }
   };
 
-  $('#dav-download-btn').onclick = () => $('#backup-download').click();
-  $('#dav-preview-btn').onclick = () => $('#backup-preview').click();
-  $('#dav-restore-btn').onclick = () => $('#restore-pick').click();
+  // 远端备份文件：文件名 trakt-backup-20261102-024400.json 本身是 UTC，
+  // 直接铺在表格里没人看得懂；换成「本地时间 + 大小」，原名降为副行并留 title。
+  const fmtBytes = (n) => {
+    const b = Number(n) || 0;
+    return b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
+  };
+  const davFileTime = (f) => {
+    const m = /^trakt-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.json$/.exec(String(f?.name || ''));
+    const d = m
+      ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`)
+      : new Date(f?.modified || '');
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
 
   const renderDavFiles = (files) => {
     const box = $('#dav-files');
-    if (!files.length) {
-      box.innerHTML = `<div class="card card-pad dav-files-card">
-        <div class="dav-files-head"><div class="dav-panel-title">远端备份文件</div><span class="note">共 0 份</span></div>
-        <p class="note" style="margin:0">远端目录里还没有本应用的备份文件。</p>
-      </div>`;
+    const list = files.slice().sort((a, b) => String(b.name || '').localeCompare(String(a.name || '')));
+    if (!list.length) {
+      box.innerHTML = `<div class="bk-files-head"><div class="bk-title">远端备份文件</div><span class="note">共 0 份</span></div>
+        <p class="note" style="margin:0">远端目录里还没有本应用的备份文件。</p>`;
       return;
     }
-    box.innerHTML = `<div class="card card-pad dav-files-card">
-      <div class="dav-files-head"><div class="dav-panel-title">远端备份文件</div><span class="note">共 ${files.length} 份 · 恢复前会先预览</span></div>
-      <table style="margin:0"><thead><tr><th>文件</th><th>大小</th><th></th></tr></thead><tbody>
-      ${files
-        .map((f, i) => `<tr>
-          <td style="padding:8px 10px">${esc(f.name)}</td>
-          <td style="padding:8px 10px;color:var(--muted)">${num(Math.max(1, Math.round((f.size || 0) / 1024)))} KB</td>
-          <td style="padding:8px 10px;white-space:nowrap;text-align:right">
-            <button class="btn dav-file-btn" data-fi="${i}">恢复</button>
-            <button class="btn dav-file-btn" data-di="${i}">删除</button>
-          </td>
-        </tr>`)
-        .join('')}
-    </tbody></table></div>`;
+    box.innerHTML = `<div class="bk-files-head">
+        <div class="bk-title">远端备份文件</div>
+        <span class="note">${isEn() ? `${list.length} files · previewed before restore` : `共 ${list.length} 份 · 恢复前会先预览`}</span>
+      </div>
+      <div class="bk-file-list">
+        ${list
+          .map((f, i) => {
+            const at = davFileTime(f);
+            return `<div class="bk-file">
+              <div class="bk-file-main">
+                <div class="bk-file-when">${at ? esc(fmtDateTime(at.toISOString())) : esc(f.name)}${
+                  i === 0 ? `<span class="bk-badge">${isEn() ? 'latest' : '最新'}</span>` : ''
+                }</div>
+                <div class="bk-file-name" title="${esc(f.name)}">${esc(f.name)} · ${fmtBytes(f.size)}</div>
+              </div>
+              <div class="bk-file-act">
+                <button class="btn dav-file-btn" data-fi="${i}">恢复</button>
+                <button class="btn dav-file-btn" data-di="${i}">删除</button>
+              </div>
+            </div>`;
+          })
+          .join('')}
+      </div>`;
     document.querySelectorAll('[data-fi]').forEach((b) => {
       b.onclick = async () => {
-        const name = files[Number(b.dataset.fi)].name;
+        const name = list[Number(b.dataset.fi)].name;
         b.disabled = true;
         b.textContent = '取回中…';
         try {
@@ -5077,14 +5246,13 @@ PAGES.settings = async () => {
     });
     document.querySelectorAll('[data-di]').forEach((b) => {
       b.onclick = async () => {
-        const f = files[Number(b.dataset.di)];
+        const f = list[Number(b.dataset.di)];
         const yes = await confirmDialog(`删除远端备份「${f.name}」？`, '只删除网盘上的这一份备份文件，不影响你的 Trakt 数据。');
         if (!yes) return;
         try {
           await apiJson('/api/backup/dav/delete', { method: 'POST', body: { name: f.name } });
           toast('远端备份已删除');
-          files.splice(Number(b.dataset.di), 1);
-          renderDavFiles(files);
+          renderDavFiles(list.filter((x) => x.name !== f.name));
         } catch (err) {
           toast(err.message, true);
         }
@@ -5092,19 +5260,29 @@ PAGES.settings = async () => {
     });
   };
 
+  // 展开 / 收起都在同一张卡里完成，不再另起一张浮卡，也不再把视口滚走
   $('#dav-files-btn').onclick = async (e) => {
     const btn = e.currentTarget;
+    const box = $('#dav-files');
+    if (!box.hidden) {
+      box.hidden = true;
+      btn.textContent = '查看远端备份';
+      btn.setAttribute('aria-expanded', 'false');
+      return;
+    }
     btn.disabled = true;
     btn.textContent = '正在加载';
     try {
       const j = await apiJson('/api/backup/dav/files');
       renderDavFiles(j.files || []);
-      $('#dav-files').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      box.hidden = false;
+      btn.textContent = '收起远端备份';
+      btn.setAttribute('aria-expanded', 'true');
     } catch (err) {
       $('#dav-status').innerHTML = `<span class="dav-bad">${esc(err.message)}</span>`;
+      btn.textContent = '查看远端备份';
     } finally {
       btn.disabled = false;
-      btn.textContent = '查看远端备份';
     }
   };
 

@@ -47,25 +47,120 @@ button, input, select, textarea { font: inherit; color: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid transparent; background-clip: content-box; border-radius: var(--r-pill); }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
 
-/* ── 布局：侧栏固定宽，内容区单列最大宽度 ── */
-.shell { display: grid; grid-template-columns: var(--nav-w) 1fr; min-height: 100vh; }
+/* ── 布局：侧栏三态（全宽 216 / 图标栏 64 / 完全收起 0），内容区单列最大宽度 ── */
+.shell {
+  --nav-w-cur: var(--nav-w);
+  display: grid;
+  /* 内容列必须 minmax(0, 1fr)：默认的 auto 最小值会被表格 / 日历的最小宽度顶开，
+     手机展开侧栏时整页就横向溢出而不是「被压缩」 */
+  grid-template-columns: var(--nav-w-cur) minmax(0, 1fr);
+  min-height: 100vh;
+  transition: grid-template-columns var(--dur) var(--ease);
+}
+.shell[data-nav-state="rail"] { --nav-w-cur: var(--nav-w-rail); }
+/* 完全收起：列宽归零，侧栏内容被 overflow 裁掉，动画与另两态同一条过渡。
+   padding 不可压缩（会留下 24px 的壳），收起时必须一并归零。 */
+.shell[data-nav-state="hidden"] { --nav-w-cur: 0px; }
+.shell[data-nav-state="hidden"] .sidebar { padding-left: 0; padding-right: 0; pointer-events: none; }
 
 .sidebar {
   position: sticky; top: 0; height: 100vh;
   display: flex; flex-direction: column; gap: var(--sp-1);
   padding: var(--sp-4) var(--sp-3);
   background: transparent;
+  min-width: 0; overflow: hidden;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
+
+
+/* 侧栏头：品牌 + 收起按钮（rail 态两个图标竖排） */
+/* padding-top 取 8：16(sidebar) + 8 = 24，与页头工具的 24 起点齐平，
+   两枚图标按钮因此落在同一条水平线上 */
+.sidebar-head { display: flex; align-items: flex-start; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) var(--sp-5); }
+.sidebar-head .brand { flex: 1; min-width: 0; padding: 0; }
+
+/* 侧栏收起 / 页头展开共用同一套「纯图标」按钮：无边框、无底色，只有悬停才浮出一层淡底 */
+.nav-toggle {
+  width: 32px; height: 32px; flex: none; margin-left: auto;
+  display: grid; place-items: center;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+.nav-toggle:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.nav-toggle svg { width: 17px; height: 17px; display: block; }
+
+.nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 图标栏：文字全部收起，只剩图标，鼠标悬停靠 title 提示 */
+.shell[data-nav-state="rail"] .brand-text,
+.shell[data-nav-state="rail"] .nav-label,
+.shell[data-nav-state="rail"] .user-meta { display: none; }
+/* 图标栏与展开态同一套材质：无背板、无边框，图标直接压在沉浸背景上。
+   overflow 放开是给悬停气泡用的，否则会被侧栏裁掉。 */
+.shell[data-nav-state="rail"] .sidebar {
+  padding-left: var(--sp-2); padding-right: var(--sp-2);
+  background: transparent;
+  border-right: 0;
+  overflow: visible;
+  /* 抬到内容之上：悬停气泡要压在卡片上，否则会被 .main 的玻璃卡盖住 */
+  z-index: var(--z-nav);
+}
+/* 没有背板时悬停态也得半透明，不然会在背景上糊一块实色方块；图标同理要抬一档亮度 */
+.shell[data-nav-state="rail"] .nav-item,
+.shell[data-nav-state="rail"] .nav-toggle { color: var(--text-2); }
+.shell[data-nav-state="rail"] .nav-item.active { color: var(--text); }
+.shell[data-nav-state="rail"] .nav-item:hover,
+.shell[data-nav-state="rail"] .nav-toggle:hover {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+.shell[data-nav-state="rail"] .sidebar-head {
+  flex-direction: column; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) 0 var(--sp-4);
+}
+/* 竖排时不能再 flex:1（会把品牌区压扁、logo 溢出被裁） */
+.shell[data-nav-state="rail"] .sidebar-head .brand { flex: none; width: 100%; justify-content: center; }
+.shell[data-nav-state="rail"] .brand { justify-content: center; }
+.shell[data-nav-state="rail"] .nav-toggle { margin-left: 0; }
+.shell[data-nav-state="rail"] .nav-item { justify-content: center; gap: 0; padding: 9px 0; }
+.shell[data-nav-state="rail"] .nav-item .ic { width: 20px; }
+.shell[data-nav-state="rail"] .sidebar-foot { align-items: center; }
+.shell[data-nav-state="rail"] .user-chip { flex-direction: column; gap: var(--sp-2); padding: 0; }
+/* 图标栏悬停气泡：替代原生 title 提示，绝对定位浮在内容区上，不推挤布局。
+   底色必须是不透明的 --panel：玻璃底压在白色卡片上会和卡片糊成一片，
+   看上去像被卡片「吃掉」了右半截。描边 + 双层投影把它抬离卡片表面。 */
+.nav-tip {
+  display: none;
+  position: absolute; left: calc(100% + 7px); top: 50%; transform: translateY(-50%);
+  z-index: var(--z-topbar);
+  padding: 5px 10px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); font-weight: var(--fw-semi); line-height: var(--lh-tight);
+  color: var(--text); white-space: nowrap; pointer-events: none;
+  background: var(--panel);
+  border: var(--hairline) solid var(--border);
+  box-shadow: 0 10px 22px -10px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .16);
+}
+.shell[data-nav-state="rail"] .nav-tip {
+  display: block; opacity: 0; visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease), visibility var(--dur-fast) var(--ease);
+}
+.shell[data-nav-state="rail"] .nav-item:hover .nav-tip,
+.shell[data-nav-state="rail"] .nav-item:focus-visible .nav-tip,
+.shell[data-nav-state="rail"] .user-chip:hover .nav-tip,
+.shell[data-nav-state="rail"] .user-chip:focus-visible .nav-tip { opacity: 1; visibility: visible; }
+/* 触屏没有真正的悬停，气泡会粘在最后一格上，直接不显示 */
+@media (hover: none) { .shell[data-nav-state="rail"] .nav-tip { display: none; } }
 
 /* ── 详情页：hero 铺满整个视口，侧边栏浮于封面之上（无分界） ── */
 /* 仅桌面生效：移动端侧栏已改成「底部导航 + 右上角账户胶囊」，不再占左侧 */
 @media (min-width: 901px) {
   .shell:has(.main.detail-view) { grid-template-columns: 1fr; }
   .shell:has(.main.detail-view) .sidebar {
-    position: fixed; left: 0; top: 0; width: var(--nav-w); z-index: var(--z-float);
+    position: fixed; left: 0; top: 0; width: var(--nav-w-cur); z-index: var(--z-float);
   }
   .shell:has(.main.detail-view) .detail-hero-inner,
-  .shell:has(.main.detail-view) .detail-lower { padding-left: calc(var(--nav-w) + 42px); }
+  .shell:has(.main.detail-view) .detail-lower { padding-left: calc(var(--nav-w-cur) + 42px); }
 }
 
 .brand { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2) var(--sp-5); }
@@ -110,33 +205,50 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .nav-item.active .ic { opacity: 1; }
 
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-2); }
-/* 账号区与侧栏背景融为一体：无卡片底、无边框，仅悬浮反馈 */
-.user-chip { display: flex; align-items: center; gap: 9px; padding: 4px 2px; border-radius: var(--r-md); }
+/* 账号区与侧栏背景融为一体：无卡片底、无边框，仅悬浮反馈。整块就是设置入口。 */
+.user-chip {
+  position: relative; display: flex; align-items: center; gap: 9px;
+  padding: 4px 6px; border-radius: var(--r-md);
+  color: inherit; text-decoration: none; cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+.user-chip:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.user-chip.active { background: var(--accent-soft); }
+.user-chip.active .user-name { color: var(--text); }
+.user-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center; font-size: var(--fs-sm); font-weight: var(--fw-bold); color: var(--on-accent); flex: none; }
 .avatar-img { object-fit: cover; background: var(--panel-2); }
-.foot-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; flex: none; }
-.icon-btn {
-  width: 26px; height: 26px; padding: 0; border: none; border-radius: var(--r-sm);
-  background: transparent; color: var(--muted); cursor: pointer;
-  display: inline-grid; place-items: center; transition: background var(--dur), color var(--dur);
-}
-.icon-btn:hover { background: var(--panel-2); color: var(--text); }
-.icon-btn svg { display: block; }
 .user-meta { min-width: 0; }
 .user-name { font-weight: var(--fw-semi); font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-sub { font-size: var(--fs-xs); color: var(--muted); }
 
 .main { padding: var(--main-pad-y) var(--main-pad-x) var(--sp-7); max-width: var(--main-max); }
 
-/* 页头：左边「标题 + 一句说明」，右边工具；底边一条发丝线把页头与内容切开 */
+/* 页头：左边「标题 + 一句说明」，右边工具；底边一条发丝线把页头与内容切开。
+   顶部对齐（而不是 flex-end）：工具条从 24px 起，和侧栏那枚按钮同一条水平线。 */
 .page-head {
-  display: flex; align-items: flex-end; justify-content: space-between;
+  display: flex; align-items: flex-start; justify-content: space-between;
   gap: var(--sp-4); margin-bottom: var(--sp-4); padding-bottom: var(--sp-3);
   border-bottom: var(--hairline) solid var(--border-soft); flex-wrap: wrap;
 }
 /* 标题行工具与标题并排：下拉与按钮统一高度 */
 .page-head .toolbar { align-items: center; }
 .page-head select { height: var(--ctl-h-sm); padding: 0 var(--sp-2); font-size: var(--fs-sm); border-radius: var(--r-sm); }
+.page-head-text { min-width: 0; }
+/* 标题 + 紧跟其右的展开按钮（间距 4px）：同一行，行高由按钮撑到 32，
+   与侧栏那枚落在同一条 24px 水平线上 */
+.page-head-title { display: flex; align-items: center; gap: 4px; min-height: 32px; }
+/* 完全收起时出现：与 .nav-toggle 同规格的纯图标按钮 */
+.nav-reveal {
+  display: none; place-items: center; flex: none;
+  width: 32px; height: 32px;
+  border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: background var(--dur), color var(--dur);
+}
+.nav-reveal:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.nav-reveal svg { width: 17px; height: 17px; display: block; }
+.shell[data-nav-state="hidden"] .nav-reveal { display: grid; }
 h1 { font-size: var(--fs-xl); line-height: var(--lh-tight); margin: 0 0 var(--sp-0); letter-spacing: var(--tracking-tight); font-weight: var(--fw-bold); }
 .sub { color: var(--muted); font-size: var(--fs-md); line-height: var(--lh-base); max-width: 760px; }
 
@@ -152,78 +264,35 @@ h1 { font-size: var(--fs-xl); line-height: var(--lh-tight); margin: 0 0 var(--sp
 .card-pad { padding: var(--card-pad); }
 
 @media (max-width: 900px) {
-  /* 移动端壳：内容单列；底栏间距只由 .main 的下内边距负责，壳里不再叠一层 */
-  .shell { display: block; grid-template-columns: 1fr; }
-
-  /* 顶栏：左侧标识 + 右侧账户操作；玻璃底透出沉浸背景，不再是一条实底白带 */
+  /* 移动端直接复用桌面那套 grid：侧栏在网格里占位（216 / 64 / 0），
+     宽度过渡就是动画，背板保持透明——不再是盖在内容上、带遮罩的白底抽屉。 */
   .sidebar {
-    position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-topbar);
-    width: auto; height: var(--topbar-h); padding: 0 var(--sp-3);
-    display: flex; flex-direction: row; align-items: center; gap: 10px;
-    background: transparent;
+    padding-top: calc(var(--sp-4) + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom, 0px));
+    height: 100dvh;
   }
-  /* 玻璃背板必须单独一层：backdrop-filter 写在 .sidebar 上会生成包含块，
-     把 fixed 的 .nav 钉进这个 56px 高的顶栏里（表现为底栏跑到顶上） */
-  .sidebar::before {
-    content: ''; position: absolute; inset: 0; z-index: -1;
-    background: color-mix(in srgb, var(--bg) 58%, transparent);
-    -webkit-backdrop-filter: blur(20px) saturate(1.4);
-    backdrop-filter: blur(20px) saturate(1.4);
-  }
-  .brand { padding: 0; gap: 8px; flex: none; }
-  .brand-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .brand-mark { width: 26px; height: 26px; border-radius: var(--r-sm); box-shadow: none; }
-  .brand-name { font-size: var(--fs-base); line-height: var(--lh-tight); white-space: nowrap; }
-  .brand-sub { font-size: var(--fs-xs); line-height: var(--lh-display); white-space: nowrap; }
-
-  /* 底栏：与顶栏同一套玻璃底，图标行直接压在同一张背景上 */
-  .nav {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-nav);
-    display: flex; flex-direction: row; align-items: stretch; gap: 0;
-    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--bg) 58%, transparent);
-    -webkit-backdrop-filter: blur(20px) saturate(1.4);
-    backdrop-filter: blur(20px) saturate(1.4);
-  }
-  .nav-item {
-    flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; gap: 3px;
-    padding: 6px 2px; font-size: var(--fs-xs); line-height: var(--lh-display); text-align: center;
-    border: none; border-radius: var(--r-md);
-  }
-  /* 选中态也不做胶囊：只换颜色与字重（清掉桌面端的左侧指示条） */
-  .nav-item.active { background: none; border: none; box-shadow: none; color: var(--accent); font-weight: var(--fw-semi); }
-  .nav-item.active::before { display: none; }
-  .nav-item.active .ic { opacity: 1; color: inherit; }
-  .nav-item .ic { width: auto; line-height: var(--lh-none); }
-  .nav-item .ic svg { width: 20px; height: 20px; }
-
-  /* 账户：顶栏右侧，头像 / 昵称 / 主题 / 退出，无卡片、无胶囊背景 */
-  .sidebar-foot { margin: 0 0 0 auto; padding: 0; display: flex; align-items: center; flex: none; }
-  .user-chip {
-    display: flex; align-items: center; gap: 7px; padding: 0;
-    background: none; border: none; border-radius: 0; box-shadow: none;
-  }
-  .user-meta { min-width: 0; }
-  .user-sub { display: none; }
-  .user-name { font-size: var(--fs-md); max-width: 70px; }
-  .foot-actions { margin-left: 2px; gap: 0; }
-  .foot-actions .icon-btn { width: 28px; height: 28px; }
-
-  /* 详情页 hero 让出顶栏高度，顶栏在详情页同样常驻 */
-  .detail-hero { margin-top: var(--topbar-h); }
-
-  /* 底部留出底栏高度 + 安全区，最后一张卡片不会被导航压住 */
   .main {
-    padding: calc(var(--topbar-h) + 4px) var(--sp-4)
-             calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + var(--sp-4));
+    padding: calc(env(safe-area-inset-top, 0px) + var(--sp-4)) var(--sp-4)
+             calc(var(--sp-6) + env(safe-area-inset-bottom, 0px));
   }
+
+  .sidebar-head { padding: 0 0 var(--sp-4); }
+  .brand-mark { width: 26px; height: 26px; border-radius: var(--r-sm); box-shadow: none; }
+  .nav-item { padding: 11px 10px; }
+
+  /* 没有顶栏了，详情页 hero 直接顶到安全区 */
+  .detail-hero { margin-top: 0; }
+  .detail-hero-inner { padding-top: calc(env(safe-area-inset-top, 0px) + var(--sp-5)); }
+  .detail-lower { padding-top: calc(env(safe-area-inset-top, 0px) + var(--sp-4)); }
+
+  /* 详情页是沉浸视图：侧栏让位（返回键就在 hero 里），hero 与正文都铺满整宽。
+     否则 64px 图标栏会把 hero 挤掉左边一条，封面直接断层。 */
+  .shell:has(.main.detail-view) { grid-template-columns: 1fr; }
+  .shell:has(.main.detail-view) .sidebar { display: none; }
 }
 @media (max-width: 560px) {
-  /* 底边必须继续让出底栏高度，否则最后一张卡片压在导航下面 */
-  .main {
-    padding: calc(var(--topbar-h) + var(--sp-2)) 14px
-             calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + var(--sp-4));
-  }
+  /* 窄屏只收紧左右内边距 */
+  .main { padding-left: 14px; padding-right: 14px; }
 }
 
 /* 表格：表头吸顶用实底（玻璃在滚动时会透出内容），行高统一 */
@@ -342,18 +411,32 @@ input[type="search"]::-webkit-search-cancel-button:hover { opacity: .85; }
 .cal-cell.today .cal-d { color: var(--accent-text); font-weight: var(--fw-bold); }
 .cal-cell.sel .cal-d { color: var(--accent-text); }
 
-/* 多剧层叠：最多三张封面，负边距叠放 + 轻微旋转 */
-.cal-stack { display: flex; align-items: flex-end; margin-top: auto; height: 34px; padding-left: 3px; }
+/* 多剧层叠：最多三张封面，负边距叠放 + 轻微旋转。
+   尺寸用百分比跟格子走（上限仍是 24×34），窄屏不会顶到隔壁格；格子再窄就逐级减张。 */
+.cal-stack {
+  display: flex; align-items: flex-end; margin-top: auto;
+  height: 34px; padding-left: 3px;
+  container-type: inline-size;
+}
 .cal-poster {
-  width: 24px; height: 34px; border-radius: var(--r-2xs); object-fit: cover; flex: none;
+  width: min(24px, 36%); height: auto; aspect-ratio: 24 / 34;
+  border-radius: var(--r-2xs); object-fit: cover; flex: none;
   background: var(--panel-3); border: var(--hairline) solid var(--panel);
-  box-shadow: var(--shadow-img); margin-left: -9px;
+  box-shadow: var(--shadow-img); margin-left: calc(-1 * min(9px, 13%));
 }
 .cal-poster:first-child { margin-left: 0; }
 .cal-poster:nth-child(1) { transform: rotate(-7deg) translateY(1px); }
 .cal-poster:nth-child(2) { transform: rotate(1deg) translateY(-1px); z-index: 1; }
 .cal-poster:nth-child(3) { transform: rotate(8deg) translateY(2px); z-index: 2; }
 .cal-poster.pending { opacity: 0.55; border-style: dashed; }
+/* 窄格：三张叠起来只剩十来个像素时看不清，减到两张；再窄就单张放大 */
+@container (max-width: 50px) {
+  .cal-poster:nth-child(3) { display: none; }
+}
+@container (max-width: 36px) {
+  .cal-poster:nth-child(2) { display: none; }
+  .cal-poster:first-child { width: min(24px, 70%); }
+}
 .cal-more {
   position: absolute; top: 4px; right: 6px;
   font-size: var(--fs-2xs); line-height: var(--lh-snug); color: var(--muted);
@@ -608,7 +691,7 @@ input[type="search"]::-webkit-search-cancel-button:hover { opacity: .85; }
   .episode-toolbar-pager { flex-basis: 100%; justify-content: space-between; }
 }
 @media (max-width: 640px) {
-  .main.detail-view { padding: 0 0 calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--sp-4)); }
+  .main.detail-view { padding: 0 0 calc(env(safe-area-inset-bottom, 0px) + var(--sp-5)); }
   .detail-hero-inner { padding: 16px 16px 26px; }
   .detail-hero-content { padding-top: 30px; }
   .detail-page-title { font-size: var(--fs-3xl); line-height: var(--lh-display); }
@@ -1050,12 +1133,21 @@ html.modal-open, html.modal-open body { overflow: hidden; }
 .ov-unit { margin-left: 4px; font-size: var(--fs-sm); font-weight: var(--fw-medium); letter-spacing: 0; color: var(--muted); }
 .ov-total-note { margin-top: 10px; font-size: var(--fs-sm); color: var(--muted); line-height: var(--lh-base); }
 .ov-cal { flex: 1; min-width: 0; }
+/* 手机 + 图标栏：内容区只剩三百出头，总时长与 7 列日历并排会被挤到裁字，改成上下排 */
+@media (max-width: 560px) {
+  .shell[data-nav-state="rail"] .ov-main-body { flex-direction: column; align-items: stretch; gap: var(--sp-3); }
+  .shell[data-nav-state="rail"] .ov-total { width: 100%; }
+  /* 同理，卡片头也不硬挤：宁可让「比上月同期」换行，也别把标题挤成两个字一行 */
+  .shell[data-nav-state="rail"] .ov-head,
+  .shell[data-nav-state="rail"] .ov-head-main { flex-wrap: wrap; }
+}
 
 .ov-heat-head {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px;
   margin-bottom: 5px; font-size: var(--fs-xs); color: var(--muted); text-align: center;
 }
-.ov-heat-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+/* minmax(0,1fr)：容器被挤窄时允许列真的缩，不然 1fr 会按 min-content 撑开、右列被卡片裁掉 */
+.ov-heat-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
 .ov-cell {
   display: grid; place-items: center; height: 26px; border-radius: var(--r-sm);
   font-size: var(--fs-xs); color: var(--muted); background: var(--panel-2); font-variant-numeric: tabular-nums;
@@ -1179,14 +1271,13 @@ html.modal-open, html.modal-open body { overflow: hidden; }
   margin: 0 0 12px; padding-bottom: 8px; border-bottom: var(--hairline) solid var(--border-soft);
 }
 .dav-form + .dav-block-title { margin-top: 22px; }
-.dav-summary .dav-block-title { margin-bottom: 10px; }
-.dav-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .9fr); gap: 22px; align-items: start; }
-.dav-config, .dav-summary { min-width: 0; }
+/* 两栏等高：右栏用 auto 外边距把「手动操作」压到底，底部按钮与左栏严格同一水平线 */
+.dav-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 22px; align-items: stretch; }
+.dav-config, .dav-summary { min-width: 0; display: flex; flex-direction: column; }
+.dav-config { position: relative; }
 .dav-summary { padding-left: 22px; border-left: var(--hairline) solid var(--border-soft); }
 .dav-panel-title { font-size: var(--fs-lead); font-weight: var(--fw-bold); margin-bottom: 18px; }
-.dav-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 18px; margin-bottom: 18px; border-bottom: var(--hairline) solid var(--border); }
-.dav-toggle-label { font-size: var(--fs-base); font-weight: var(--fw-semi); }
-.dav-toggle-hint { font-size: var(--fs-sm); color: var(--muted); margin-top: 4px; }
+
 
 .switch { position: relative; display: inline-flex; width: 46px; height: 26px; flex: none; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
@@ -1206,35 +1297,73 @@ select.dav-input { cursor: pointer; }
 /* 备份周期也用 pick-field 了：高度 / 边框 / 内边距沿用 .dav-input，展开态给浮层的强调色 */
 .pick-field.dav-input[aria-expanded="true"] { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 
-.dav-actions { display: flex; align-items: center; gap: 10px; margin-top: 20px; }
+/* 推到栏底，与右栏「手动操作」同一水平线 */
+.dav-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-top: 20px; }
 .dav-actions .btn { height: var(--ctl-h); padding: 0 18px; }
 .dav-actions .btn-primary { min-width: 120px; }
+/* 保存 / 测试的反馈绝对定位在按钮下方：文案出现不撑高左栏，右栏「手动操作」不会跟着下移 */
+#dav-status { position: absolute; left: 0; right: 0; top: 100%; margin: 10px 0 0; }
 #dav-status:empty { display: none; }
 
 .dav-rows { display: flex; flex-direction: column; }
-.dav-row { display: flex; align-items: flex-start; gap: 14px; padding: 10px 0; border-bottom: var(--hairline) solid var(--border-soft); font-size: var(--fs-md); }
+/* 两列定宽 + 首行基线对齐：标签始终从同一 x 起、数值始终贴同一右缘，
+   行与行之间不会因字号或换行跳动 */
+.dav-row {
+  display: grid; grid-template-columns: 72px minmax(0, 1fr);
+  gap: 14px; align-items: baseline;
+  padding: 10px 0; border-bottom: var(--hairline) solid var(--border-soft); font-size: var(--fs-md);
+}
 .dav-row:last-child { border-bottom: 0; }
-.dav-row-label { color: var(--muted); font-size: var(--fs-sm); flex: none; min-width: 72px; }
-.dav-row-value { margin-left: auto; text-align: right; line-height: var(--lh-base); overflow-wrap: anywhere; }
+.dav-row-label { color: var(--muted); font-size: var(--fs-sm); }
+.dav-row-value { text-align: right; line-height: var(--lh-base); overflow-wrap: anywhere; }
 .dav-ok { color: var(--ok); font-weight: var(--fw-semi); }
 .dav-bad { color: var(--danger); font-weight: var(--fw-semi); }
-.dav-primary-wide { width: 100%; height: var(--ctl-h); margin-top: 12px; }
-.dav-secondary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
-.dav-secondary .btn { height: 36px; padding: 0 10px; font-size: var(--fs-sm); }
-.dav-files-card { margin-top: 16px; }
-.dav-files-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.dav-files-head .dav-panel-title { margin: 0; }
 .dav-file-btn { height: 30px; padding: 0 10px; font-size: var(--fs-sm); }
+
+/* ── 备份卡：卡内分三段（本机 / WebDAV / 远端文件），用发丝线分隔，不再各占一张卡 ── */
+.bk-block { padding: 20px 0; }
+.bk-block:first-of-type { padding-top: 0; }
+.bk-block:last-of-type { padding-bottom: 0; }
+.bk-block + .bk-block { border-top: var(--hairline) solid var(--border-soft); }
+/* WebDAV 段底部多留一行：绝对定位的状态提示落在内边距里，不压到分隔线 */
+.dav-block { padding-bottom: 34px; }
+.bk-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.bk-title { font-size: var(--fs-lg); font-weight: var(--fw-semi); letter-spacing: var(--tracking-tight); }
+.bk-sub { margin-top: 4px; font-size: var(--fs-sm); color: var(--muted); }
+/* 本机备份的三个动作：一排自然宽，放不下就换行（与 .settings-foot 同一套观感） */
+.bk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bk-actions .btn { height: 34px; }
+/* 「手动操作」整块贴到栏底，两栏底部按钮因此成一条水平线 */
+.dav-foot { margin-top: auto; padding-top: 22px; }
+/* WebDAV 手动操作：两颗按钮同一行、等分等宽等高，主次只靠颜色区分 */
+.dav-manual { display: flex; gap: 8px; margin-top: 12px; }
+.dav-manual .btn { flex: 1 1 0; min-width: 0; height: var(--ctl-h); padding: 0 10px; }
+
+.bk-files-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.bk-files-head .bk-title { font-size: var(--fs-base); }
+.bk-file-list { display: flex; flex-direction: column; }
+.bk-file { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; border-top: var(--hairline) solid var(--border-soft); }
+.bk-file:first-child { border-top: 0; }
+.bk-file-main { min-width: 0; }
+.bk-file-when { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); font-weight: var(--fw-medium); font-variant-numeric: tabular-nums; }
+.bk-badge { padding: 1px 6px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-2xs); font-weight: var(--fw-semi); }
+.bk-file-name { margin-top: 3px; font-size: var(--fs-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-file-act { display: flex; gap: 6px; flex: none; }
 
 @media (max-width: 900px) {
   .dav-grid { grid-template-columns: 1fr; }
   .dav-summary { padding: 20px 0 0; border-left: 0; border-top: var(--hairline) solid var(--border-soft); }
+  /* 单列没有并排对齐问题：提示回到文档流正常占位，不会压住下一段 */
+  #dav-status { position: static; margin: 12px 0 0; }
+  .dav-block { padding-bottom: 20px; }
 }
 @media (max-width: 560px) {
   .dav-form { grid-template-columns: 1fr; }
-  .dav-secondary { grid-template-columns: 1fr; }
   .dav-actions { flex-wrap: wrap; }
   .dav-actions .btn { flex: 1; }
+  /* 远端备份一行放不下时，操作按钮换到第二行右对齐 */
+  .bk-file { flex-wrap: wrap; }
+  .bk-file-act { width: 100%; justify-content: flex-end; }
 }
 
 /* 尊重系统的「减少动效」 */
@@ -1288,6 +1417,13 @@ html[data-bg="on"][data-theme="light"] { --card-bg: rgba(255, 255, 255, .66); --
    ══════════════════════════════════════════════════════════════════════ */
 .settings { display: flex; flex-direction: column; gap: var(--sp-3); }
 .settings-card { padding: var(--card-pad); }
+/* 账号卡：头像 + 名字 + 退出，放在设置页最顶上，不套 settings-head 省一行 */
+.account-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.account-id { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.avatar-lg { width: 46px; height: 46px; font-size: var(--fs-lg); }
+.account-text { min-width: 0; }
+.account-name { font-size: var(--fs-lg); font-weight: var(--fw-semi); letter-spacing: var(--tracking-tight); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-sub { margin-top: 2px; font-size: var(--fs-sm); color: var(--muted); }
 .settings-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: var(--sp-4); }
 .settings-ic {
   width: 34px; height: 34px; flex: none; border-radius: var(--r-md);
@@ -1359,10 +1495,20 @@ html[data-bg="on"][data-theme="light"] { --card-bg: rgba(255, 255, 255, .66); --
 
 /* 搜索页：工具条 + 表格，与片单同一套观感 */
 .search-manager { padding: 0; overflow: hidden; }
-.search-input { flex: 1 1 260px; max-width: 420px; }
+/* 输入框吃掉中间剩余宽度，搜索按钮紧贴在它后面 */
+.search-input { flex: 1 1 320px; max-width: 640px; }
 .search-table { min-width: 560px; }
+/* 输入框与「搜索」成组：桌面上它不生成盒子，二者仍是工具条的直接子项、并排一行 */
+.search-line { display: contents; }
 @media (max-width: 640px) {
-  .search-input { flex-basis: 100%; max-width: none; }
+  /* 窄屏两行：类型按内容宽靠左单独一行，输入框与「搜索」同在第二行。
+     类型不再被拉成 100%，横贯卡片的浅色背景块随之消失。 */
+  .search-bar { flex-direction: column; align-items: stretch; }
+  .search-bar #s-type { flex: none; align-self: flex-start; }
+  .search-bar .search-line { display: flex; align-items: center; gap: 10px; }
+  .search-bar .search-input { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .search-bar .episode-toolbar-pager { flex: 0 0 auto; justify-content: flex-end; }
+  .search-bar #s-hint { display: none; }
 }
 
 /* ───────── 片单表格：直接复用 .episode-table 的观感，只覆盖列宽与封面比例 ───────── */

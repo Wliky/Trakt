@@ -44,6 +44,8 @@ export const ICON = {
   auto: svg16('<circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 0 0 12Z" fill="currentColor" stroke="none"/>'),
   power: svg16('<path d="M8 2.2v5.4"/><path d="M4.6 4.4a5.4 5.4 0 1 0 6.8 0"/>'),
   back: svg16('<path d="M9.5 3.5 5 8l4.5 4.5"/>'),
+  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+  panel: svg('<rect x="3.4" y="4.4" width="17.2" height="15.2" rx="2.4"/><path d="M9.6 4.4v15.2"/>'),
 };
 
 /** 标题两行单元：主标题 + 副标题（副标题为空时不渲染）；attrs 用于挂本地化标记 */

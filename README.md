@@ -6,7 +6,7 @@
 
 - 线上：https://trakt.wliky.workers.dev
 - 仓库：https://github.com/Wliky/Trakt
-- 版本：1.2.0
+- 版本：2.0.0
 
 ## 功能
 
