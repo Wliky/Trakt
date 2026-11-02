@@ -19,7 +19,7 @@ import {
 import { initI18n, t, getLang, setLang, LANGS } from './i18n.js';
 
 // 前端版本：排查缓存时在控制台执行 __TM_VERSION__，对不上就是浏览器还在用旧文件
-window.__TM_VERSION__ = '202611021750';
+window.__TM_VERSION__ = '202611021949';
 
 // Trakt 官方 mark（取自 trakt.tv/favicon.svg 的矢量原样，48 格紫底白线）：
 // 站点 favicon（public/favicon.svg）与品牌方块共用同一份图形，改一处要一起改
@@ -969,6 +969,23 @@ function navState() {
   return saved || 'full';
 }
 
+/**
+ * 切换侧栏时 .shell 的 grid-template-columns 在做补间，内容列每帧都在变宽变窄：
+ * 卡片如果继续带 backdrop-filter，就要逐帧重采样背景模糊（移动端直接掉帧），
+ * 部分 Chromium / WebKit 还会在这一层重新分配时把卡片内容丢掉，只剩玻璃底。
+ * 所以切换期间给 .shell 挂 nav-animating（styles.css 里摘掉卡片模糊），
+ * 动画结束再摘掉并重算「继续观看」的行距（列宽变了，可用的行高也变了）。
+ */
+let navAnimTimer = null;
+function markNavAnimating(shellEl) {
+  shellEl.classList.add('nav-animating');
+  clearTimeout(navAnimTimer);
+  navAnimTimer = setTimeout(() => {
+    shellEl.classList.remove('nav-animating');
+    fitContList();
+  }, 220);
+}
+
 /** 写状态 + 同步侧栏头按钮与页头那枚 ☰ 的展开态 */
 function applyNavState(next, persist = true) {
   const shellEl = document.querySelector('.shell');
@@ -976,6 +993,8 @@ function applyNavState(next, persist = true) {
   const wanted = NAV_STATES.includes(next) ? next : 'full';
   // 窄屏兜底：从桌面全宽缩到手机时，就地钳成图标栏
   const val = isNarrow() && wanted === 'full' ? 'rail' : wanted;
+  // 只有真的换态才走动画分支：窗口 resize 时的重复调用不该反复摘模糊
+  if (shellEl.dataset.navState !== val) markNavAnimating(shellEl);
   shellEl.dataset.navState = val;
   if (persist) {
     try { localStorage.setItem(NAV_STATE_KEY, val); } catch {}
@@ -3092,6 +3111,7 @@ function ovContinueCard(list) {
           ? fmtDateTime(it.paused_at)
           : '';
       const href = detailHref({ type: mv ? 'movie' : 'episode', ids, season: ep.season, number: ep.number });
+      const subLine = [esc(code), esc(total), esc(when)].filter(Boolean).join(' · ');
       // 悬停提示按显示语言重拼：%1 = 剧名、%2 = 集名，localize() 拿到译名后替换
       const tipKeys = [locKeyFor(kind, ids)];
       if (epName) tipKeys.push(locKeyFor('episode', it.show?.ids || ids, ep.season, ep.number));
@@ -3113,12 +3133,18 @@ function ovContinueCard(list) {
       <span class="ov-cont-art">${posterImg(`/api/poster?${artQuery(kind, ids)}`, 'ov-cont-poster')}</span>
       <span class="ov-cont-meta">
         <span class="ov-cont-title" ${locAttrs(kind, ids)}>${esc(title)}</span>
-        ${
+        <span class="ov-cont-sub">${subLine}${
+          // 集名不是每条都有：以前单独占一行，卡片里就会出现 3 行和 4 行两种高度，
+          // 几行参差不齐。改挂在这行末尾（跟着一起省略），每条都固定三行、高度就齐了
           epName
-            ? `<span class="ov-cont-ep" ${locAttrs('episode', it.show?.ids || ids, ep.season, ep.number)}>${esc(epName)}</span>`
+            ? `${subLine ? ' · ' : ''}<span class="ov-cont-ep" ${locAttrs(
+                'episode',
+                it.show?.ids || ids,
+                ep.season,
+                ep.number
+              )}>${esc(epName)}</span>`
             : ''
-        }
-        <span class="ov-cont-sub">${[esc(code), esc(total), esc(when)].filter(Boolean).join(' · ')}</span>
+        }</span>
         <span class="ov-cont-bar"><i style="width:${pct}%"></i></span>
       </span>
       <span class="ov-cont-side"><b class="ov-cont-pct">${esc(sideMain)}</b>${
@@ -3134,33 +3160,62 @@ function ovContinueCard(list) {
  * 继续观看卡与同一行左侧的日历卡等高：列表只吃卡片剩余高度，放不下就在卡片内滚动，
  * 行数不设上限（能放几行放几行）。底部那截「不够一整行」的缝有两种处理：
  * 差得不多就均摊进行距正好铺到卡片底边（既不留白也不露毛边），差得多就直接铺满、
- * 末行露半截当「还有更多」的提示。单列（窄屏）没有同行卡，就让卡片按内容自然长高。
+ * 末行露半截当「还有更多」的提示。
+ * 单列（≤900px）没有同行卡可对齐，卡片高度改由视口给一个「目标高度」（约半屏，见 soloCardHeight），
+ * 之后走的是**同一套**逻辑：能放几整行放几行，剩的缝均摊进行距正好铺满；缝太大就不摊、卡片按行数收短。
+ * 单列这里绝不露半截——手机上半截条目看着就像被切坏的图，多的交给卡内滚动，条数靠卡头的「N 条」交代。
  */
 const CONT_MIN_ROW = 24; // 半行高度：继续观看卡剩余空间小于它时不算「真空间」，见下方取整说明
+const CONT_SOLO_MAX_H = 400; // 单列卡片的目标高度上限
+const CONT_SOLO_VH = 0.44; // 同时不超过视口高度的这个比例，高低屏各自自适应
+
+/** 卡片所在行是不是只剩它一张（.ov-grid 在 ≤900px 落成单列） */
+function isSoloCard(card) {
+  const grid = card.parentElement;
+  if (!grid) return false;
+  return getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length < 2;
+}
+
+/**
+ * 单列时卡片的目标高度。只跟宽度绑定：手机浏览器地址栏收起/展开会改 innerHeight、
+ * 触发 resize，如果跟着重算，用户一滚动卡片就会忽高忽低；所以宽度没变就沿用上一次的值。
+ */
+let soloCapW = 0;
+let soloCapH = 0;
+function soloCardHeight() {
+  if (soloCapW !== window.innerWidth) {
+    soloCapW = window.innerWidth;
+    soloCapH = Math.min(CONT_SOLO_MAX_H, Math.round((window.innerHeight || 800) * CONT_SOLO_VH));
+  }
+  return soloCapH;
+}
+
 function fitContList(root = document) {
   root.querySelectorAll?.('.ov-cont-list').forEach((list) => {
     const card = list.closest('.ov-cont');
     if (!card) return;
+    // 先把列表压扁（并回到设计稿行距），卡片高度就回到「同行另一张卡的自然高度」，
+    // 再把这部分空间还给列表
+    list.style.rowGap = '';
+    list.style.maxHeight = '0px';
     const cs = getComputedStyle(card);
     const head = card.querySelector('.ov-head');
     const chrome =
       (parseFloat(cs.paddingTop) || 0) +
       (parseFloat(cs.paddingBottom) || 0) +
       (head ? head.getBoundingClientRect().height + (parseFloat(getComputedStyle(head).marginBottom) || 0) : 0);
-    // 先把列表压扁（并回到设计稿行距），卡片高度就回到「同行另一张卡的自然高度」，
-    // 再把这部分空间还给列表
-    list.style.rowGap = '';
-    list.style.maxHeight = '0px';
-    // clientHeight 是取整后的整数，chrome 带小数：单列（窄屏）时两者相减会剩下 0~0.5px 的
-    // 「假空间」，照它分配会把列表压成 0 高（手机字体下 head 高度常带小数，就是这来的）。
-    // 不足半行的余量一律当归零：清空 max-height，让卡片按内容自然长高。
-    const avail = card.clientHeight - chrome;
-    if (avail < CONT_MIN_ROW) {
-      list.style.maxHeight = ''; // 单列没有同行卡：按内容自然长高，交给页面滚动
-      return;
-    }
     const gap = parseFloat(getComputedStyle(list).rowGap) || 8;
     const kids = [...list.children];
+    // 单列没有同行卡可比高：可用高度改由视口给（soloCardHeight），下面的分配逻辑两边完全共用
+    const solo = isSoloCard(card);
+    // clientHeight 是取整后的整数，chrome 带小数：两者相减会剩下 0~0.5px 的「假空间」，
+    // 照它分配会把列表压成 0 高（手机字体下 head 高度常带小数，就是这来的）。
+    // 不足半行的余量一律当归零：清空 max-height，让卡片按内容自然长高。
+    const avail = (solo ? soloCardHeight() : card.clientHeight) - chrome;
+    if (avail < CONT_MIN_ROW) {
+      list.style.maxHeight = ''; // 同行卡太矮（或行里只剩这一张）：按内容自然长高
+      return;
+    }
     let used = 0;
     let fit = 0; // 能完整放下的行数
     for (let i = 0; i < kids.length; i += 1) {
@@ -3174,7 +3229,15 @@ function fitContList(root = document) {
       // 差小半行：把这截缝均摊进行距，正好铺到卡片底边，底部不留白也不露毛边
       const g = Math.floor((gap + extra / (fit - 1)) * 100) / 100;
       list.style.rowGap = `${g}px`;
+      list.style.maxHeight = `${Math.floor(avail)}px`;
+      return;
     }
+    if (solo) {
+      // 单列：缝太大就不摊，卡片按整行收短，绝不露半截
+      list.style.maxHeight = `${Math.ceil(used || avail)}px`;
+      return;
+    }
+    // 桌面端缝大就铺满，末行露半截当「还有更多」的提示
     list.style.maxHeight = `${Math.floor(extra >= 12 ? avail : used || avail)}px`;
   });
 }

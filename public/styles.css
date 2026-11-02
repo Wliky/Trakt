@@ -96,6 +96,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .shell[data-nav-state="rail"] .brand-text,
 .shell[data-nav-state="rail"] .nav-label,
 .shell[data-nav-state="rail"] .user-meta { display: none; }
+/* 完全收起：列宽补间到 0 的过程中标签会先被挤成十几像素宽，
+   不做 nowrap 就会折成「观/览」竖排（看得见一闪）。收起态干脆不参与排版。 */
+.shell[data-nav-state="hidden"] .brand-text,
+.shell[data-nav-state="hidden"] .nav-label,
+.shell[data-nav-state="hidden"] .user-meta { display: none; }
 /* 图标栏与展开态同一套材质：无背板、无边框，图标直接压在沉浸背景上。
    overflow 放开是给悬停气泡用的，否则会被侧栏裁掉。 */
 .shell[data-nav-state="rail"] .sidebar {
@@ -164,6 +169,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 .brand { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2) var(--sp-5); }
+/* 品牌两行同样不折行：收起时被侧栏裁掉，而不是压成「观影/中心」两段 */
+.brand-text { min-width: 0; overflow: hidden; white-space: nowrap; }
 /* 品牌方块 = Trakt 官方 mark（自带紫底白线），外层只负责尺寸与光晕 */
 .brand-mark {
   width: 30px; height: 30px; flex: none; border-radius: var(--r-md);
@@ -200,6 +207,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 2px; height: 17px; margin-top: -8.5px;
   border-radius: var(--r-3xs); background: var(--accent);
 }
+/* 侧栏宽度在 216 / 64 / 0 之间补间时，标签会先被压到十几像素宽。
+   没有 nowrap 就会逐字折成竖排（收 / 起那一下能看见），侧栏本身 overflow:hidden，超出部分裁掉即可。 */
+.nav-label { white-space: nowrap; }
 .nav-item .ic { width: 18px; text-align: center; opacity: .9; display: inline-flex; align-items: center; justify-content: center; }
 .nav-item .ic svg { width: 17px; height: 17px; display: block; }
 .nav-item.active .ic { opacity: 1; }
@@ -220,7 +230,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .avatar-img { object-fit: cover; background: var(--panel-2); }
 .user-meta { min-width: 0; }
 .user-name { font-weight: var(--fw-semi); font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-sub { font-size: var(--fs-xs); color: var(--muted); }
+.user-sub { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .main { padding: var(--main-pad-y) var(--main-pad-x) var(--sp-7); max-width: var(--main-max); }
 
@@ -262,6 +272,16 @@ h1 { font-size: var(--fs-xl); line-height: var(--lh-tight); margin: 0 0 var(--sp
   -webkit-backdrop-filter: blur(var(--card-blur));
 }
 .card-pad { padding: var(--card-pad); }
+/* 切换侧栏的 160ms 里 .shell 逐帧改内容列宽 → 每张卡都要重新采样一次背后的模糊。
+   移动端 GPU 扛不住（掉帧），Chromium / WebKit 在「backdrop-filter 元素尺寸变化」时
+   还会丢掉这一层的绘制内容，只剩玻璃底（截图里下方两张卡整块空白就是这个）。
+   动画期间先摘掉卡片模糊：背后的 #backdrop 本身已经 blur(30px)，卡片下面也没有别的东西，
+   视觉几乎无差，却省掉每帧一次全卡重采样，也避免合成层缓存错位。
+   由 app.js 的 markNavAnimating() 在切换开始时挂上、结束后摘掉。 */
+.shell.nav-animating .main .card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 @media (max-width: 900px) {
   /* 移动端直接复用桌面那套 grid：侧栏在网格里占位（216 / 64 / 0），
@@ -1209,7 +1229,11 @@ html.modal-open, html.modal-open body { overflow: hidden; }
 .ov-cont-list::-webkit-scrollbar-track { background: transparent; }
 .ov-cont-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
 .ov-cont-list::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-/* 一行四段：标题 / 集名 / 「S01E01 · 26 分钟 · 12 天前」/ 细进度条，右边窄栏给 7% + 剩 24 分 */
+/* 单列（手机）下继续观看同样是「定高 + 卡内滚动」（高度由 fitContList 按整行封顶）：
+   卡内滑到底后接着滑要能带动整页，别让 contain 把滚动链拦住 */
+@media (max-width: 900px) { .ov-cont-list { overscroll-behavior: auto; } }
+/* 一行三段：标题 / 「S01E01 · 26 分钟 · 12 天前 · 集名」/ 细进度条，右边窄栏给 7% + 剩 24 分。
+   副标题固定一行、集名挂在行尾，每条高度才对得齐 */
 .ov-cont-item {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center;
   padding: 8px 10px; border: var(--hairline) solid var(--border); border-radius: var(--r-sm);
@@ -1222,8 +1246,8 @@ html.modal-open, html.modal-open body { overflow: hidden; }
 .ov-cont-poster { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ov-cont-meta { min-width: 0; display: grid; gap: 3px; }
 .ov-cont-title { font-size: var(--fs-sm); font-weight: var(--fw-semi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ov-cont-ep,
 .ov-cont-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-2xs); color: var(--muted); }
+.ov-cont-ep { font-size: inherit; color: var(--muted); }
 .ov-cont-bar { display: block; height: 4px; margin-top: 5px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .ov-cont-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--grad-accent); }
 .ov-cont-side { flex: none; display: grid; justify-items: end; gap: 1px; text-align: right; white-space: nowrap; }
