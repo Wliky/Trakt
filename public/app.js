@@ -19,7 +19,7 @@ import {
 import { initI18n, t, getLang, setLang, LANGS } from './i18n.js';
 
 // 前端版本：排查缓存时在控制台执行 __TM_VERSION__，对不上就是浏览器还在用旧文件
-window.__TM_VERSION__ = '202611072038';
+window.__TM_VERSION__ = '202611072109';
 
 // Trakt 官方 mark（取自 trakt.tv/favicon.svg 的矢量原样，48 格紫底白线）：
 // 站点 favicon（public/favicon.svg）与品牌方块共用同一份图形，改一处要一起改
@@ -147,6 +147,14 @@ const fmtDateTime = (iso) => {
   if (!day) return '';
   const hm = fmtClock(iso);
   return hm ? `${day} ${hm}` : day;
+};
+
+/** 分集观看时间：本年省年份（11-03 17:01），跨年补全（2025-11-03 17:01） */
+const fmtWatchedAt = (iso) => {
+  const d = new Date(iso || '');
+  if (Number.isNaN(d.getTime())) return '';
+  const day = `${d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}-`}${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${day} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 };
 
 const isEn = () => getLang() === 'en-US';
@@ -438,16 +446,25 @@ function openDetail({ type, ids, season, number }) {
 let detailView = null;
 let detailToken = 0;
 
-/** 该剧的观看记录 → S{季}E{集} → 观看次数（最多翻 5 页 × 100 条） */
+/** 该剧的观看记录 → S{季}E{集} → { plays, at }（最多翻 5 页 × 100 条） */
 async function watchedEpisodeMap(showTrakt) {
   const map = new Map();
+  const note = (k, at) => {
+    const prev = map.get(k);
+    if (!prev) {
+      map.set(k, { plays: 1, at: at || '' });
+      return;
+    }
+    prev.plays += 1;
+    // 同一集看过多次时留最近一次：表格里的「观看时间」只展示最后看过的时间
+    if (at && (!prev.at || Date.parse(at) > Date.parse(prev.at))) prev.at = at;
+  };
   for (let page = 1; page <= 5; page += 1) {
     const r = await api(`/sync/history/shows/${showTrakt}`, { query: { page, limit: 100 } });
     (r.data || []).forEach((it) => {
       const ep = it.episode || {};
       if (ep.season == null || ep.number == null) return;
-      const k = `S${ep.season}E${ep.number}`;
-      map.set(k, (map.get(k) || 0) + 1);
+      note(`S${ep.season}E${ep.number}`, it.watched_at || '');
     });
     const meta = r.pagination || {};
     if (!meta.pageCount || page >= meta.pageCount) break;
@@ -1465,7 +1482,13 @@ async function loadDetailWatched(showTrakt) {
     const map = new Map();
     (r.data?.seasons || []).forEach((season) => {
       (season.episodes || []).forEach((ep) => {
-        if (ep.completed) map.set(`S${season.number}E${ep.number}`, 1);
+        // progress/watched 每集自带 last_watched_at 与 play_count，不用再单独查历史
+        if (ep.completed) {
+          map.set(`S${season.number}E${ep.number}`, {
+            plays: Number(ep.stats?.play_count) || 1,
+            at: ep.last_watched_at || '',
+          });
+        }
       });
     });
     // 同一份响应里就有续播位置，顺手记下来给「上次看到 / 下一集」用，不额外打接口
@@ -1652,7 +1675,7 @@ function renderDetailHero() {
       </div>
       ${info.logoSub ? `<div class="detail-page-sub detail-sub-logo">${esc(info.logoSub)}</div>` : ''}
       ${info.sub && info.sub !== info.title ? `<div class="detail-page-sub detail-sub-plain">${esc(info.sub)}</div>` : ''}
-      <div class="detail-page-facts">${info.facts.filter(Boolean).map((f) => `<span>${typeof f === 'string' ? esc(f) : f.__html}</span>`).join('<i>·</i>')}</div>
+      <div class="detail-page-facts">${info.facts.filter(Boolean).map((f) => `<span>${f && typeof f === 'object' && f.__html !== undefined ? f.__html : esc(String(f))}</span>`).join('<i>·</i>')}</div>
       ${target.type === 'movie' || target.type === 'show' ? (meta.genres || []).length ? `<div class="detail-page-genres">${meta.genres.map((g) => `<span class="chip">${esc(g)}</span>`).join('')}</div>` : '' : ''}
       <p class="detail-page-overview">${esc(info.overview || '暂无简介')}</p>
       <div class="detail-page-links">
@@ -1716,7 +1739,10 @@ function detailSelection(v) {
 
 function detailEpisodeRow(v, ep) {
   const key = `S${v.season}E${ep.number}`;
-  const watched = Boolean(v.watched.get(key));
+  const info = v.watched.get(key);
+  const watched = Boolean(info);
+  const watchedAt = fmtWatchedAt(info?.at);
+  const plays = Number(info?.plays) || 0;
   const air = String(ep.first_aired || '').slice(0, 10);
   const future = Boolean(air && air > todayStr());
   const selected = v.target?.type === 'episode' && Number(v.target.number) === Number(ep.number);
@@ -1729,10 +1755,11 @@ function detailEpisodeRow(v, ep) {
       <span class="episode-table-art"><img loading="lazy" src="/api/poster?${artQuery('episode', v.params.ids, v.season, ep.number)}" alt="" onerror="this.closest('.episode-table-art').classList.add('thumb-empty');this.remove()" /></span>
       <span class="episode-code">${code}</span>
     </div></td>
-    <td class="episode-title-cell"><strong>${esc(title)}</strong></td>
+    <td class="episode-title-cell"><strong>${esc(title)}</strong><span class="episode-title-sub">${watched ? `已看${watchedAt ? ` · ${esc(watchedAt)}` : ''}` : future ? '未播' : '未看'}</span></td>
     <td class="episode-date-cell">${esc(air || '—')}</td>
+    <td class="episode-watched-cell">${watchedAt ? `<span class="episode-watched-at">${esc(watchedAt)}</span>${plays > 1 ? `<span class="episode-watched-plays">×${plays}</span>` : ''}` : '<span class="episode-watched-none">—</span>'}</td>
     <td class="episode-runtime-cell">${ep.runtime ? `${ep.runtime} 分钟` : '—'}</td>
-    <td><span class="chip${watched ? ' ok' : ''}">${watched ? '已看' : future ? '未播' : '未看'}</span></td>
+    <td class="episode-status-cell"><span class="chip${watched ? ' ok' : ''}">${watched ? '已看' : future ? '未播' : '未看'}</span></td>
     <td class="episode-action-cell"><button type="button" class="btn btn-sm episode-watch${watched ? '' : ' btn-primary'}" data-episode-watch="${ep.number}">${watched ? '取消已看' : '标记看过'}</button></td>
   </tr>`;
 }
@@ -1746,7 +1773,7 @@ function paintEpisodeManager(v) {
   const start = v.episodePage * EPISODE_PAGE_SIZE;
   const pageEps = filtered.slice(start, start + EPISODE_PAGE_SIZE);
   $('#episode-rows', root).innerHTML = pageEps.map((ep) => detailEpisodeRow(v, ep)).join('') ||
-    '<tr><td colspan="7"><div class="episode-empty">没有匹配的分集</div></td></tr>';
+    '<tr><td colspan="8"><div class="episode-empty">没有匹配的分集</div></td></tr>';
   paintEpisodeSelection(v, pageEps);
   $('#episode-result-count', root).textContent = `${filtered.length} 集`;
   const watched = v.episodes.filter((ep) => v.watched.get(`S${v.season}E${ep.number}`)).length;
@@ -1940,9 +1967,9 @@ function renderDetailBody() {
           <button type="button" class="btn btn-sm" id="episode-selection-clear">清空选择</button>
         </div>
       </div>
-      <div class="episode-table-wrap">
-        <table class="episode-table">
-          <thead><tr><th class="episode-check-cell"><input type="checkbox" class="checkbox" id="episode-check-all" aria-label="选择本页全部分集" /></th><th>集</th><th>标题</th><th class="episode-date-cell">首播</th><th class="episode-runtime-cell">时长</th><th>状态</th><th>操作</th></tr></thead>
+      <div class="episode-table-wrap detail-episode-table-wrap">
+        <table class="episode-table detail-episode-table">
+          <thead><tr><th class="episode-check-cell"><input type="checkbox" class="checkbox" id="episode-check-all" aria-label="选择本页全部分集" /></th><th>集</th><th>标题</th><th class="episode-date-cell">首播</th><th class="episode-watched-cell">观看时间</th><th class="episode-runtime-cell">时长</th><th class="episode-status-cell">状态</th><th class="episode-action-cell">操作</th></tr></thead>
           <tbody id="episode-rows"></tbody>
         </table>
       </div>

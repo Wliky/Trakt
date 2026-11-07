@@ -647,13 +647,44 @@ input[type="search"]::-webkit-search-cancel-button:hover { opacity: .85; }
 .episode-table-wrap { max-height: 640px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--panel-3) transparent; }
 .episode-table { width: 100%; min-width: 780px; border-collapse: collapse; table-layout: fixed; }
 .episode-table th { position: sticky; top: 0; z-index: 2; padding: 10px 14px; background: var(--panel-2); border-bottom: var(--hairline) solid var(--border); color: var(--muted); font-size: var(--fs-xs); font-weight: var(--fw-semi); text-align: left; }
-/* 第一列是多选勾选框：宽度固定，原标题 / 日期等列整体顺延一位 */
-.episode-table th:first-child { width: 40px; padding-left: 14px; padding-right: 0; }
-.episode-table th:nth-child(2) { width: 205px; }
-.episode-table th:nth-child(4) { width: 116px; }
-.episode-table th:nth-child(5) { width: 82px; }
-.episode-table th:nth-child(6) { width: 78px; }
-.episode-table th:nth-child(7) { width: 112px; text-align: right; }
+/* 第一列是多选勾选框：宽度固定，原标题 / 日期等列整体顺延一位
+   （详情页剧集表多一列「观看时间」，列宽在 .detail-episode-table 里单独定，这里排除掉） */
+.episode-table:not(.detail-episode-table) th:first-child { width: 40px; padding-left: 14px; padding-right: 0; }
+.episode-table:not(.detail-episode-table) th:nth-child(2) { width: 205px; }
+.episode-table:not(.detail-episode-table) th:nth-child(4) { width: 116px; }
+.episode-table:not(.detail-episode-table) th:nth-child(5) { width: 82px; }
+.episode-table:not(.detail-episode-table) th:nth-child(6) { width: 78px; }
+.episode-table:not(.detail-episode-table) th:nth-child(7) { width: 112px; text-align: right; }
+
+/* ── 详情页剧集表：列宽自适应，标题换行，任何宽度都不横向滚动 ──
+   表头与内容共用同一套 class 对齐（勾选居中 / 数值与操作右对齐，其余左对齐）。 */
+.detail-episode-table { min-width: 0; }
+.detail-episode-table th,
+.detail-episode-table td { text-align: left; }
+.detail-episode-table th.episode-check-cell,
+.detail-episode-table td.episode-check-cell { width: 40px; padding-left: 14px; padding-right: 0; text-align: center; }
+.detail-episode-table th:nth-child(2) { width: 196px; }
+.detail-episode-table th:nth-child(4) { width: 100px; }
+.detail-episode-table th:nth-child(5) { width: 116px; }
+.detail-episode-table th:nth-child(6) { width: 74px; }
+.detail-episode-table th:nth-child(7) { width: 72px; }
+.detail-episode-table th:nth-child(8) { width: 100px; text-align: right; }
+.detail-episode-table td.episode-action-cell { text-align: right; }
+/* 标题不再省略号截断：长标题换行，行高保持一致的行距 */
+.detail-episode-table .episode-title-cell strong {
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  line-height: var(--lh-snug);
+}
+/* 窄屏把状态与观看时间折进标题下方，不再单独占列 */
+.detail-episode-table .episode-title-sub { display: none; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.detail-episode-table .episode-watched-cell { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.detail-episode-table .episode-watched-plays { margin-left: 4px; color: var(--muted); font-size: var(--fs-2xs); }
+.detail-episode-table .episode-watched-none { color: var(--muted); }
+/* 数据区大小统一，纵向滚动条独占一侧，不因内容宽度抖动 */
+.detail-episode-table-wrap { overflow-x: hidden; }
 .episode-check-cell { text-align: center; }
 .episode-selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); padding: 10px 20px; border-bottom: var(--hairline) solid var(--border-soft); background: var(--panel-2); color: var(--text-2); font-size: var(--fs-sm); }
 .episode-selection-bar[hidden] { display: none; }
@@ -732,12 +763,39 @@ input[type="search"]::-webkit-search-cancel-button:hover { opacity: .85; }
   .episode-search { order: 3; flex-basis: 100%; }
   .episode-batch { order: 4; }
   .episode-toolbar-pager { order: 5; }
-  .episode-table { min-width: 570px; }
+  .episode-table:not(.detail-episode-table) { min-width: 570px; }
   .episode-table th, .episode-table td { padding-left: 10px; padding-right: 10px; }
-  .episode-table th:first-child { width: 36px; }
-  .episode-table th:nth-child(2) { width: 166px; }
+  .episode-table:not(.detail-episode-table) th:first-child { width: 36px; }
+  .episode-table:not(.detail-episode-table) th:nth-child(2) { width: 166px; }
   .episode-date-cell, .episode-runtime-cell { display: none; }
   .episode-table-art { width: 72px; }
+}
+
+/* 详情页剧集表：按可用宽度逐列收起，任何视口都不横向滚动
+   （首播 → 时长 → 观看时间与状态，收起的列在标题下方用一行小字补回来） */
+@media (max-width: 1100px) {
+  .detail-episode-table th.episode-date-cell,
+  .detail-episode-table td.episode-date-cell { display: none; }
+}
+@media (max-width: 920px) {
+  .detail-episode-table th.episode-runtime-cell,
+  .detail-episode-table td.episode-runtime-cell { display: none; }
+}
+@media (max-width: 760px) {
+  .detail-episode-table th.episode-watched-cell,
+  .detail-episode-table td.episode-watched-cell,
+  .detail-episode-table th.episode-status-cell,
+  .detail-episode-table td.episode-status-cell { display: none; }
+  .detail-episode-table .episode-title-sub { display: block; margin-top: 2px; }
+}
+@media (max-width: 560px) {
+  .detail-episode-table th.episode-check-cell,
+  .detail-episode-table td.episode-check-cell { width: 30px; padding-left: 10px; }
+  .detail-episode-table th:nth-child(2) { width: 128px; }
+  .detail-episode-table th:nth-child(8) { width: 88px; }
+  .detail-episode-table .episode-ident { gap: 8px; }
+  .detail-episode-table .episode-table-art { width: 54px; }
+  .detail-episode-table .episode-action-cell .btn { padding: 0 8px; }
 }
 @media (max-width: 380px) {
   .detail-page-title { font-size: var(--fs-2xl); }
