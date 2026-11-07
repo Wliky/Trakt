@@ -1,6 +1,6 @@
 {
   "name": "Trakt",
-  "version": "2.2.0",
+  "version": "2.4.0",
   "private": true,
   "type": "module",
   "description": "自托管的 Trakt 观影数据管理中心：邮箱验证码登录（无需创建 OAuth 应用），管理观看历史、评分、收藏与片单，支持 Node / Docker / Cloudflare Workers + D1 部署",

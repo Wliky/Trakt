@@ -19,7 +19,7 @@ import {
 import { initI18n, t, getLang, setLang, LANGS } from './i18n.js';
 
 // 前端版本：排查缓存时在控制台执行 __TM_VERSION__，对不上就是浏览器还在用旧文件
-window.__TM_VERSION__ = '202611021949';
+window.__TM_VERSION__ = '202611072038';
 
 // Trakt 官方 mark（取自 trakt.tv/favicon.svg 的矢量原样，48 格紫底白线）：
 // 站点 favicon（public/favicon.svg）与品牌方块共用同一份图形，改一处要一起改
@@ -646,9 +646,22 @@ function bindActions(ctx, st) {
       }
       toggle.disabled = true;
       try {
-        const j = watched
-          ? await runAction({ type, ids, season, number, action: 'unwatch' })
-          : await runAction({ type, ids, season, number, action: 'watch', when: choice.when, date: choice.date, at: choice.at });
+        // 单集同样走整季接口：按「剧 + 季号 + 集号」写，分集自己的 trakt id 缺失时照样能标记
+        let j;
+        if (type === 'episode') {
+          j = await postLocal('/api/season/watch', {
+            ids: detailView?.params?.ids || {},
+            season,
+            action: watched ? 'unwatch' : 'watch',
+            episodes: [Number(number)],
+            ...(choice || {}),
+          });
+          if (j.failed) throw new Error(j.errors?.[0] || '这一集在 Trakt 上还没有分集记录，暂时写不进去');
+        } else {
+          j = watched
+            ? await runAction({ type, ids, season, number, action: 'unwatch' })
+            : await runAction({ type, ids, season, number, action: 'watch', when: choice.when, date: choice.date, at: choice.at });
+        }
         toast(watched ? '已取消观看' : j.note ? `已标记（${j.note}）` : '已标记为已看');
         await after(j, watched ? 'unwatch' : 'watch');
       } catch (e) {
@@ -1846,7 +1859,10 @@ async function runSelectedWatch(btn) {
 async function toggleDetailEpisode(number, btn) {
   const v = detailView;
   const ep = v?.episodes.find((e) => Number(e.number) === Number(number));
-  if (!v || !ep?.ids?.trakt) return toast('缺少分集 id，无法操作', true);
+  if (!v || !ep) return toast('找不到这一集，刷新后重试', true);
+  // 单集也走整季接口：服务端按「剧 + 季号 + 集号」写，不依赖分集自己的 trakt id
+  // （Trakt 数据偶尔缺分集 id，以前这里会直接报「缺少分集 id，无法操作」）
+  if (!v.params.ids?.trakt && !v.params.ids?.slug) return toast('这个条目缺少 Trakt id，无法操作', true);
   const watched = Boolean(v.watched.get(`S${v.season}E${ep.number}`));
   let choice = null;
   if (!watched) {
@@ -1858,10 +1874,14 @@ async function toggleDetailEpisode(number, btn) {
   }
   btn.disabled = true;
   try {
-    await runAction({
-      type: 'episode', ids: ep.ids, season: v.season, number: ep.number,
-      action: watched ? 'unwatch' : 'watch', ...(choice || {}),
+    const r = await postLocal('/api/season/watch', {
+      ids: v.params.ids,
+      season: v.season,
+      action: watched ? 'unwatch' : 'watch',
+      episodes: [Number(ep.number)],
+      ...(choice || {}),
     });
+    if (r.failed) throw new Error(r.errors?.[0] || '这一集在 Trakt 上还没有分集记录，暂时写不进去');
     toast(watched ? '已取消观看' : '已标记为已看');
     await detailActionUpdated(null, watched ? 'unwatch' : 'watch');
     if (v.target?.type === 'episode' && Number(v.target.number) === Number(ep.number)) await loadDetailTargetState();
@@ -1912,6 +1932,7 @@ function renderDetailBody() {
         </div>
       </div>
       ${v.watchedDegraded ? '<p class="note">观看状态暂未同步，列表可能不是最新。</p>' : ''}
+      ${v.seasonDegraded ? '<p class="note">分集数据暂时不全（部分来自 TMDB），标记仍可用，稍后刷新可恢复完整信息。</p>' : ''}
       <div class="episode-selection-bar" id="episode-selection-bar" hidden>
         <span id="episode-selection-label"></span>
         <div class="episode-selection-actions">
@@ -2144,6 +2165,7 @@ async function selectDetailTarget(type, season, number) {
       if (v !== detailView || token !== detailToken || selection !== v.selection) return;
       v.season = Number(season);
       v.episodes = data.episodes || [];
+      v.seasonDegraded = Boolean(data.degraded);
       v.episodePage = 0;
     }
     if (type === 'episode' && number !== undefined) {
@@ -2215,6 +2237,7 @@ async function renderDetailPage() {
       v.seasons = seasonData.seasons || [];
       v.season = Number(seasonData.season);
       v.episodes = seasonData.episodes || [];
+      v.seasonDegraded = Boolean(seasonData.degraded);
       v.episodePage = params.type === 'episode' && params.number !== undefined ? episodePageFor(params.number) : 0;
       v.seasonCache.set(v.season, seasonData);
     }
